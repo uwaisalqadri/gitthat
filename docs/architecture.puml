@@ -1,0 +1,475 @@
+' ============================================================
+'  GITTHAT — Architecture Diagrams
+'  Render:  plantuml docs/architecture.puml
+'  Produces one PNG per @startuml block.
+' ============================================================
+
+
+' ------------------------------------------------------------
+'  1. THE CORE IDEA — who does what
+'     Read this one first. Everything else is detail.
+' ------------------------------------------------------------
+@startuml 1-oracle-model
+title == The Oracle Model ==\nGITTHAT does everything. The agent only writes text.
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 13
+skinparam ActivityBorderColor #5F6368
+skinparam ActivityDiamondBorderColor #5F6368
+
+|#E8F0FE|GITTHAT (deterministic)|
+start
+:read the repo\n<size:11><color:#5F6368>diff, log, status, range</color></size>;
+:build a prompt;
+
+|#FEF7E0|Agent CLI (non-deterministic)|
+:write text\n<size:11><color:#5F6368>claude / codex / ollama</color></size>;
+note right
+  The **only** unpredictable step.
+  Gets a string. Returns a string.
+  Cannot touch the repository.
+end note
+
+|#E8F0FE|GITTHAT (deterministic)|
+:parse the response;
+:validate against allowlist;
+:show a preview;
+
+if (user confirms?) then (<color:#188038>yes</color>)
+  :run git;
+  stop
+else (<color:#C5221F>no</color>)
+  :nothing changed;
+  stop
+endif
+
+@enduml
+
+
+' ------------------------------------------------------------
+'  2. THE PRODUCT BOUNDARY — what GITTHAT can reach
+' ------------------------------------------------------------
+@startuml 2-boundary
+title == What GITTHAT Can Reach ==\n<size:12>current branch · unpushed by default · never pushes</size>
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam linetype ortho
+skinparam rectangle {
+  BorderColor #5F6368
+  FontSize 12
+}
+skinparam ArrowColor #5F6368
+
+rectangle "  origin  <size:10>(remote)</size>  " as Remote #FCE8E6 {
+  rectangle "origin/main" as OM
+  rectangle "origin/feature/sso" as OS
+}
+
+rectangle "  local repository  " as Local #FFFFFF {
+
+  rectangle "main" as Main #EEEEEE
+  rectangle "feature/other" as Other #EEEEEE
+
+  rectangle "**feature/sso**  <size:11>← you are here</size>" as Cur #E6F4EA {
+    rectangle "1d9f003  wip auth scaffolding\n<size:10>⚠ pushed — needs 2nd confirm</size>" as K1 #FFF3E0
+    rectangle "c4e7a10  add token refresh\n<size:10>⚠ pushed — needs 2nd confirm</size>" as K2 #FFF3E0
+    rectangle "8b02de1  fix typo\n<size:10>local — default range</size>" as K3 #E6F4EA
+    rectangle "a3f21c9  wip\n<size:10>local — default range</size>" as K4 #E6F4EA
+  }
+}
+
+OS ..> K2 : <size:10>upstream marker</size>
+
+note right of Other #FFEBEE
+  **Never touched.**
+  No --onto, no merge,
+  no cherry-pick.
+  Cross-branch requests
+  are declined by name.
+end note
+
+note bottom of Remote #FFEBEE
+  **GITTHAT never pushes.**
+  It prints the command:
+  git push --force-with-lease
+end note
+
+legend bottom
+  |<#E6F4EA>  | in range by default — rewrite freely |
+  |<#FFF3E0>  | reachable, but requires a separate confirmation |
+  |<#EEEEEE>  | out of scope entirely |
+endlegend
+
+@enduml
+
+
+' ------------------------------------------------------------
+'  3. MODULE STRUCTURE — layered, top to bottom
+' ------------------------------------------------------------
+@startuml 3-modules
+title == Module Structure ==
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam linetype ortho
+skinparam nodesep 25
+skinparam ranksep 45
+skinparam rectangle {
+  BorderColor #5F6368
+  FontSize 13
+}
+skinparam ArrowColor #5F6368
+
+rectangle "  👤  User  " as User #FFFFFF
+
+rectangle "**gitthat**  <size:11>(executable — thin)</size>" as ExeLayer #E8F0FE {
+  rectangle "commit" as C1
+  rectangle "rewrite" as C2
+  rectangle "undo" as C3
+  rectangle "<size:11>__edit-message</size>\n<size:10>(hidden — acts as GIT_EDITOR)</size>" as C4 #DADCE0
+}
+
+rectangle "**GitThatKit**  <size:11>(library — all the logic)</size>" as KitLayer #E6F4EA {
+  rectangle "Prompts\n<size:10>builds the ask</size>" as M1
+  rectangle "Plan\n<size:10>inert + validated</size>" as M2
+  rectangle "UI\n<size:10>preview + confirm</size>" as M3
+  rectangle "Safety\n<size:10>backup refs · guards</size>" as M4
+  rectangle "Config\n<size:10>toml</size>" as M5
+}
+
+rectangle "Provider  <size:11>«protocol»</size>\n<size:10>complete(String) async -> String</size>" as Prov #FEF7E0
+
+rectangle "Git\n<size:10>process wrapper — no policy</size>" as Git #E6F4EA
+
+rectangle "Agent CLI\n<size:10>claude · codex · ollama</size>" as Agent #FCE8E6
+rectangle "  .git  " as Repo #FCE8E6
+rectangle "config.toml\n<size:10>global + per-repo</size>" as Files #FCE8E6
+
+User     --> ExeLayer
+ExeLayer --> KitLayer
+KitLayer --> Prov
+KitLayer --> Git
+Prov     --> Agent  : <size:10>prompt on stdin\ntext on stdout</size>
+Git      --> Repo
+M5       --> Files
+
+legend bottom
+  |<#E8F0FE>  | thin command layer — argument parsing only |
+  |<#E6F4EA>  | deterministic core — everything testable |
+  |<#FEF7E0>  | the one seam where an LLM enters |
+  |<#FCE8E6>  | outside world |
+endlegend
+
+@enduml
+
+
+' ------------------------------------------------------------
+'  4. gitthat commit
+' ------------------------------------------------------------
+@startuml 4-commit
+title == gitthat commit ==
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam ParticipantPadding 12
+skinparam SequenceGroupBodyBackgroundColor #FAFAFA
+
+actor User
+participant "commit" as Cmd #E8F0FE
+participant "Git" as Git #E6F4EA
+participant "Provider" as Prov #FEF7E0
+participant "UI" as UI #E6F4EA
+
+User -> Cmd : gitthat commit
+
+== gather ==
+Cmd -> Git : stagedDiff()
+return diff <size:10>(truncated to 8KB)</size>
+
+alt #FFF3E0 nothing staged
+  Cmd -> User : "Nothing staged. Stage all?"
+end
+
+Cmd -> Git : log(20) + branch name
+return subjects + ticket id
+
+== resolve style ==
+Cmd -> Cmd : --conventional / --plain\n→ config\n→ infer from history (70%)
+alt #FFF3E0 history ambiguous
+  Cmd -> User : "conventional or plain?"
+  User --> Cmd : choice
+  Cmd -> Cmd : write ./.gitthat.toml\n<size:10>asked at most once per repo</size>
+end
+
+== ask ==
+Cmd -> Prov : complete(prompt)
+return raw text
+
+Cmd -> Cmd : strip fences,\nsplit subject / body
+
+Cmd -> Cmd : **enforce casing**\nlowercase any word matching ^[A-Z][a-z]+$
+note right of Cmd #FAFAFA
+  Deterministic repair, not a retry.
+
+  feat(x): WIP fixing DNS lookup ASAP   ✓
+  feat(x): WIP Fixing DNS Lookup ASAP   ✗ → fixed
+
+  Passes untouched: DNS · WIP · iOS
+  GitHub · refreshToken · TokenStore
+end note
+
+== confirm ==
+Cmd -> UI : preview(message)
+UI -> User : rendered message
+User --> UI : [a]ccept [e]dit [r]egenerate [c]ancel
+
+alt #FFF3E0 edit
+  UI -> User : opens $EDITOR
+else regenerate
+  UI --> Prov : ask again
+else cancel
+  Cmd --> User : exit — nothing changed
+end
+
+Cmd -> Git : commit -F -  <size:10>(message on stdin)</size>
+return new SHA
+Cmd --> User : ✓ committed
+
+@enduml
+
+
+' ------------------------------------------------------------
+'  5. gitthat rewrite — the interesting one
+' ------------------------------------------------------------
+@startuml 5-rewrite
+title == gitthat rewrite ==\n<size:12>guard → plan → confirm → back up → execute</size>
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam ParticipantPadding 12
+skinparam SequenceGroupBodyBackgroundColor #FAFAFA
+
+actor User
+participant "rewrite" as Cmd #E8F0FE
+participant "Git" as Git #E6F4EA
+participant "Safety" as Safe #E6F4EA
+participant "Provider" as Prov #FEF7E0
+participant "Plan" as Plan #E6F4EA
+
+User -> Cmd : gitthat rewrite\n"""combine the wip commits"""
+
+== 1. guard ==
+alt #FFEBEE intent names another branch
+  Cmd --> User : "GITTHAT rewrites the current branch only.\nUse `git rebase main` directly."
+end
+
+Cmd -> Git : status()
+return clean?
+alt #FFEBEE dirty tree
+  Cmd --> User : refuse — commit, stash, or --autostash
+end
+
+Cmd -> Safe : resolveRange()
+Safe -> Git : rev-list @{upstream}..HEAD
+note right of Safe #FAFAFA
+  No upstream? fall back to
+  merge-base with default branch.
+  -n <count> overrides.
+end note
+return commits + pushed flags
+
+== 2. plan ==
+Cmd -> Prov : commits + intent
+return JSON plan
+
+Cmd -> Plan : decode + validate
+note right of Plan #FAFAFA
+  **The plan is the wanted history,
+  in order.** Reordering is the array
+  order — not an operation.
+
+  keep · combine · reword · delete
+  ---
+  every SHA within range, exactly once
+  first entry is not `combine`
+  `reword` carries a message
+  ---
+  push / reset / other branches are
+  **not representable** in the type
+end note
+
+alt #FFF3E0 invalid
+  Plan --> Cmd : validation error
+  Cmd -> Prov : retry **once**, error appended
+end
+return validated plan
+
+== 3. confirm ==
+Cmd -> User : before → after, numbered
+User --> Cmd : proceed?
+
+alt #FFF3E0 range includes pushed commits
+  Cmd -> User : ⚠ 2 commits already on origin.\nYou'll need git push --force-with-lease.
+  User --> Cmd : **second** confirmation
+end
+
+alt #FFEBEE declined
+  Cmd --> User : exit — nothing changed
+end
+
+== 4. execute ==
+Cmd -> Safe : createBackupRef()
+Safe -> Git : update-ref refs/gitthat/backup/<ts>
+return ✓ recoverable
+
+Cmd -> Cmd : translate plan → todo file\n+ message queue
+note right of Cmd #FAFAFA
+  <size:10>The only place git's vocabulary exists:</size>
+  keep                  → pick
+  combine keepMessage   → squash
+  combine               → fixup
+  reword                → reword
+  delete                → line omitted
+  array order           → line order
+end note
+
+Cmd -> Git : <size:10>(implementation detail)</size>\nrebase -i
+note right of Git #FEF7E0
+  **GIT_SEQUENCE_EDITOR** → emits our todo
+  git never opens an editor
+
+  **GIT_EDITOR** → gitthat __edit-message
+  pops prepared messages off the queue
+end note
+
+alt #FFF3E0 conflict
+  Git --> Cmd : non-zero + .git/rebase-merge
+  Cmd --> User : see diagram 6
+else success
+  Git --> Cmd : ok
+end
+
+== 5. verify <size:10>(optional)</size> ==
+alt #FAFAFA [rewrite] verify is set
+  Cmd -> Cmd : run configured command
+  alt #FFEBEE failed
+    Cmd --> User : ✗ verify failed —\n**gitthat undo** restores\n<size:10>no automatic rollback</size>
+  end
+end
+
+Cmd --> User : ✓ rewritten\n<size:11>`gitthat undo` restores</size>
+
+@enduml
+
+
+' ------------------------------------------------------------
+'  6. CONFLICT RESOLUTION — human always sees real text
+' ------------------------------------------------------------
+@startuml 6-conflicts
+title == Conflict Resolution ==\n<size:12>nothing is staged that the user has not seen</size>
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 13
+skinparam ActivityBorderColor #5F6368
+
+start
+:git stopped —\nread conflicted files\n<size:10>diff --name-only --diff-filter=U</size>;
+
+while (another conflicted file?) is (<color:#188038>yes</color>)
+
+  |#E8F0FE|GITTHAT|
+  :collect ours, theirs,\n**+ message of the commit\nbeing applied**;
+  note right
+    That intent is what separates
+    a plausible merge from
+    a correct one.
+  end note
+
+  |#FEF7E0|Agent|
+  :draft a resolution;
+
+  |#E8F0FE|GITTHAT|
+  :show ours │ theirs │ proposed\n<size:10>as actual resulting text</size>;
+
+  switch (user chooses)
+  case (accept)
+    :write proposal to file;
+    :**open $EDITOR on it**;
+  case (edit)
+    :open $EDITOR;
+  case (ours / theirs)
+    :take that side;
+  case (skip)
+    :leave conflicted;
+  endswitch
+
+  :stage only after\nthe user has seen the file;
+
+endwhile (<color:#5F6368>no</color>)
+
+:resume the rewrite;
+
+if (verify configured?) then (<color:#188038>yes</color>)
+  :run `swift test`;
+  if (passed?) then (<color:#188038>yes</color>)
+    :✓ done;
+  else (<color:#C5221F>no</color>)
+    #FFEBEE:report failure —\n**gitthat undo** restores;
+  endif
+else (no)
+  :✓ done;
+endif
+
+stop
+
+@enduml
+
+
+' ------------------------------------------------------------
+'  7. WHY IT IS SAFE
+' ------------------------------------------------------------
+@startuml 7-safety
+title == Repository Safety ==\n<size:12>every path leads back to Clean</size>
+
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam state {
+  BorderColor #5F6368
+  FontSize 13
+}
+
+[*] --> Clean
+
+state Clean #E6F4EA
+state BackedUp #FEF7E0
+state Conflicted #FFEBEE
+state Rewritten #E8F0FE
+
+Clean      --> BackedUp   : history op confirmed
+BackedUp   --> Clean      : user declines
+BackedUp   --> Rewritten  : rewrite succeeds
+BackedUp   --> Conflicted : conflict
+
+Conflicted --> Rewritten  : resolve + --resume
+Conflicted --> Clean      : --cancel
+
+Rewritten  --> Clean      : **gitthat undo**
+
+note right of BackedUp #FAFAFA
+  refs/gitthat/backup/<timestamp>
+  written **before** git is touched
+end note
+
+note right of Rewritten #FAFAFA
+  Backup refs are retained,
+  so undo stays available
+  later, not just immediately.
+
+  Remote is still untouched —
+  GITTHAT never pushes.
+end note
+
+@enduml
