@@ -16,7 +16,8 @@ These apply to every task without being repeated.
 
 - **Swift 6.3**, tools version 6.0, `.macOS(.v13)` platform floor.
 - **Swift Testing** (`import Testing`, `@Test`, `#expect`). Never XCTest.
-- **No user-facing string may contain** `rebase`, `squash`, `fixup`, `pick`, or `todo`. Task 12 enforces this with a test. This covers help text, prompts, previews, and error messages.
+- **No user-facing string may contain** `rebase`, `squash`, or `fixup`. Task 12 enforces this with a test, covering help text, prompts, previews, and error messages. (The spec also forbids `pick` and `todo`; both are deferred to Plan 2, where history rewriting introduces them. `pick` is ordinary English — "pick a style" — and would false-positive on Plan 1's own copy.)
+- **Never run `git commit`.** Stage completed work with `git add -A` and stop. The human commits at each task boundary, after the task passes review. A task ends staged, not committed.
 - **`GitThatKit` must not import `ArgumentParser`.** Only the executable target parses arguments.
 - **Every type crossing an `async` boundary is `Sendable`.**
 - **Tests create repositories in fresh temp directories** and remove them afterwards. No test touches a fixed path or the developer's real git config.
@@ -330,11 +331,11 @@ public struct SystemGitRunner: GitRunner {
 Run: `swift test --filter GitRunnerTests`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: Stage for review**
 
 ```bash
 git add Package.swift Sources/ Tests/
-git commit -m "feat: add package scaffold and git process wrapper"
+# Do not commit. Stop here and report — the human commits at this boundary.
 ```
 
 ---
@@ -638,11 +639,11 @@ public struct Git: Sendable {
 Run: `swift test --filter GitTests`
 Expected: PASS, 9 tests.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Stage for review**
 
 ```bash
 git add Sources/GitThatKit/Git.swift Tests/GitThatKitTests/
-git commit -m "feat: add typed git queries and repo fixture builder"
+# Do not commit. Stop here and report — the human commits at this boundary.
 ```
 
 ---
@@ -797,11 +798,11 @@ public enum SubjectCase {
 Run: `swift test --filter SubjectCaseTests`
 Expected: PASS, 24 test cases across 5 functions.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Stage for review**
 
 ```bash
 git add Sources/GitThatKit/SubjectCase.swift Tests/GitThatKitTests/SubjectCaseTests.swift
-git commit -m "feat: enforce subject casing rule"
+# Do not commit. Stop here and report — the human commits at this boundary.
 ```
 
 ---
@@ -950,11 +951,11 @@ If `wholeMatch(in:)` produces a compiler error about optionality, the correct
 call is `subject.wholeMatch(of: pattern) != nil`. Use whichever compiles and
 keep the behaviour identical.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Stage for review**
 
 ```bash
 git add Sources/GitThatKit/CommitStyle.swift Tests/GitThatKitTests/CommitStyleTests.swift
-git commit -m "feat: infer commit style from repository history"
+# Do not commit. Stop here and report — the human commits at this boundary.
 ```
 
 ---
@@ -1046,11 +1047,11 @@ public enum TicketID {
 Run: `swift test --filter TicketIDTests`
 Expected: PASS, 12 test cases across 4 functions.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Stage for review**
 
 ```bash
 git add Sources/GitThatKit/TicketID.swift Tests/GitThatKitTests/TicketIDTests.swift
-git commit -m "feat: extract ticket ids from branch names"
+# Do not commit. Stop here and report — the human commits at this boundary.
 ```
 
 ---
@@ -1230,11 +1231,11 @@ public enum ResponseParser {
 Run: `swift test --filter ResponseParserTests`
 Expected: PASS, 20 test cases across 8 functions.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Stage for review**
 
 ```bash
 git add Sources/GitThatKit/ResponseParser.swift Tests/GitThatKitTests/ResponseParserTests.swift
-git commit -m "feat: parse agent responses into commit messages"
+# Do not commit. Stop here and report — the human commits at this boundary.
 ```
 
 ---
@@ -1497,11 +1498,11 @@ public struct CLIProvider: Provider {
 Run: `swift test --filter ProviderTests`
 Expected: PASS, 7 tests. The timeout test takes about one second; the rest are immediate.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Stage for review**
 
 ```bash
 git add Sources/GitThatKit/Provider.swift Tests/GitThatKitTests/
-git commit -m "feat: add provider protocol and CLI provider"
+# Do not commit. Stop here and report — the human commits at this boundary.
 ```
 
 ---
@@ -1812,11 +1813,11 @@ Expected: PASS, 8 tests.
 
 TOMLKit's accessor names may differ slightly from `.table`, `.array`, `.string`, `.int`, `.bool`. If the build fails, read the TOMLKit API and adjust the accessors only — the structure and defaults must not change.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Stage for review**
 
 ```bash
 git add Sources/GitThatKit/Config.swift Tests/GitThatKitTests/ConfigTests.swift
-git commit -m "feat: load layered toml configuration"
+# Do not commit. Stop here and report — the human commits at this boundary.
 ```
 
 ---
@@ -2013,11 +2014,11 @@ public enum Prompts {
 Run: `swift test --filter PromptsTests`
 Expected: PASS, 10 tests.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Stage for review**
 
 ```bash
 git add Sources/GitThatKit/Prompts.swift Tests/GitThatKitTests/PromptsTests.swift
-git commit -m "feat: build commit message prompts"
+# Do not commit. Stop here and report — the human commits at this boundary.
 ```
 
 ---
@@ -2254,11 +2255,11 @@ public struct TerminalUI: UserInterface {
 Run: `swift test --filter UITests`
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Stage for review**
 
 ```bash
 git add Sources/GitThatKit/UI.swift Tests/GitThatKitTests/UITests.swift
-git commit -m "feat: add terminal rendering and confirmation prompts"
+# Do not commit. Stop here and report — the human commits at this boundary.
 ```
 
 ---
@@ -2714,11 +2715,11 @@ git init -q -b main && echo hello > a.txt && git add -A
 Run: `/path/to/gitthat/.build/debug/gitthat commit`
 Expected: it reads the staged diff, calls the configured agent CLI, shows a preview, and commits on `a`. If no agent CLI is configured it must fail with a clear message naming the missing command — not a crash.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Stage for review**
 
 ```bash
 git add Sources/ Tests/
-git commit -m "feat: add commit flow and gitthat commit subcommand"
+# Do not commit. Stop here and report — the human commits at this boundary.
 ```
 
 ---
@@ -2924,11 +2925,11 @@ This resolves a contradiction: the original said "otherwise plain" while step 4 
 Run: `swift test`
 Expected: PASS. Roughly 110 test cases across 12 files, completing in well under a minute.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: Stage for review**
 
 ```bash
 git add Tests/ scripts/ .gitthat.toml docs/
-git commit -m "test: add vocabulary lint and own-history check"
+# Do not commit. Stop here and report — the human commits at this boundary.
 ```
 
 ---
