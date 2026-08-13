@@ -141,6 +141,12 @@ Expected: success. If TOMLKit fails to resolve, run `swift package resolve` and 
 
 `Tests/GitThatKitTests/GitRunnerTests.swift`:
 
+> **Amended during execution.** The two file-scope helpers below —
+> `withTempDirectory` and `isolatedGitEnvironment` — now live in
+> `Tests/GitThatKitTests/Support/TestSupport.swift` instead. Six later tasks
+> depend on them, and shared helpers belong beside `RepoFixture`, not in an
+> unrelated test file. The code is unchanged; only its home moved.
+
 ```swift
 import Foundation
 import Testing
