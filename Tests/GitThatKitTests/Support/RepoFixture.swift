@@ -86,4 +86,22 @@ final class RepoFixture {
         run(["log", "--format=%s"]).stdout
             .split(separator: "\n").map(String.init)
     }
+
+    /// Returns a cheap copy of this fixture in a new temp directory.
+    ///
+    /// Copying a built `.git` directory costs ~34ms vs ~2.7s for a full rebuild,
+    /// making this load-bearing for the exhaustive permutation suite. Each copy
+    /// is an independent repo — rewrites in one do not affect the others.
+    func copy() -> RepoFixture {
+        let dst = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gitthat-repo-\(UUID().uuidString)")
+        try! FileManager.default.copyItem(at: directory, to: dst)
+        return RepoFixture(existingDirectory: dst, runner: runner)
+    }
+
+    /// Init from an already-initialised directory (used by `copy()`).
+    private init(existingDirectory: URL, runner: SystemGitRunner) {
+        self.directory = existingDirectory
+        self.runner = runner
+    }
 }

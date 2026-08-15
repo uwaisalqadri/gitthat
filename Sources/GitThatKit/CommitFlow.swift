@@ -1,5 +1,4 @@
 import Foundation
-import TOMLKit
 
 public enum CommitOutcome: Sendable, Equatable {
     case committed(sha: String)
@@ -113,22 +112,62 @@ public struct CommitFlow {
     /// Writes the chosen style to the repository config so the question is
     /// asked at most once per repository.
     ///
-    /// Uses TOMLKit to parse and re-serialize so an existing [commit] table is
-    /// updated in place rather than duplicated (which would corrupt the file).
+    /// Uses surgical text replacement to preserve the user's comments and
+    /// hand-formatting. Three cases:
+    ///   1. `style = "..."` already present under [commit] → replace the value.
+    ///   2. `[commit]` table exists but has no style key → insert after the header.
+    ///   3. No [commit] table at all → append one.
     private func persist(style: CommitStyle) {
         guard let path = repositoryConfigPath else { return }
-        let existing = (try? String(contentsOf: path, encoding: .utf8)) ?? ""
-        guard let table = try? TOMLTable(string: existing.isEmpty ? "" : existing) else { return }
-        // Get or create the [commit] sub-table.
-        let commitTable: TOMLTable
-        if let existing = table["commit"]?.table {
-            commitTable = existing
-        } else {
-            commitTable = TOMLTable()
-            table["commit"] = commitTable
+        var text = (try? String(contentsOf: path, encoding: .utf8)) ?? ""
+        let value = style.rawValue
+
+        let commitHeaderPattern = #/^[ \t]*\[commit\][ \t]*$/#.anchorsMatchLineEndings()
+        guard let commitRange = text.firstRange(of: commitHeaderPattern) else {
+            // Case 3: no [commit] section — append one.
+            if !text.hasSuffix("\n") && !text.isEmpty { text += "\n" }
+            text += "\n[commit]\nstyle = \"\(value)\"\n"
+            try? text.write(to: path, atomically: true, encoding: .utf8)
+            return
         }
-        commitTable["style"] = style.rawValue
-        try? table.convert().write(to: path, atomically: true, encoding: .utf8)
+
+        // The [commit] table body runs from after the header to the next table
+        // header (a line starting with `[`) or end of file.
+        let afterHeader = commitRange.upperBound
+        let nextTablePattern = #/^[ \t]*\[/#.anchorsMatchLineEndings()
+        let bodyEnd: String.Index
+        if let nextRange = text[afterHeader...].firstRange(of: nextTablePattern) {
+            bodyEnd = nextRange.lowerBound
+        } else {
+            bodyEnd = text.endIndex
+        }
+
+        // Case 1: replace an existing style line within [commit] only, but not
+        // inside triple-quoted multi-line strings.
+        // Split on `"""`: even-indexed segments are outside string literals,
+        // odd-indexed segments are inside them.
+        // Matches `style = "plain"` or `style = 'plain'` with any surrounding whitespace.
+        let styleLinePattern = #/^[ \t]*style[ \t]*=[ \t]*["'][^"']*["'][ \t]*$/#
+            .anchorsMatchLineEndings()
+        let commitBody = String(text[afterHeader..<bodyEnd])
+        let segments = commitBody.components(separatedBy: "\"\"\"")
+        let hasStyleOutsideStrings = segments.enumerated().contains { idx, seg in
+            idx % 2 == 0 && seg.contains(styleLinePattern)
+        }
+        if hasStyleOutsideStrings {
+            // Rebuild: replace style in outside segments only.
+            let newBody = segments.enumerated().map { idx, seg in
+                idx % 2 == 0 ? seg.replacing(styleLinePattern, with: "style = \"\(value)\"") : seg
+            }.joined(separator: "\"\"\"")
+            text.replaceSubrange(afterHeader..<bodyEnd, with: newBody)
+            try? text.write(to: path, atomically: true, encoding: .utf8)
+            return
+        }
+
+        // Case 2: [commit] table exists but has no style key — insert after the header.
+        let insertion = "\nstyle = \"\(value)\""
+        text.insert(contentsOf: insertion, at: afterHeader)
+        try? text.write(to: path, atomically: true, encoding: .utf8)
     }
 
     /// Calls the provider and parses the response. On a first parse failure,

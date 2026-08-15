@@ -23,7 +23,7 @@ public enum StyleInference {
     private static let conventionalThreshold = 0.70
     private static let plainThreshold = 0.30
 
-    public static func isConventional(_ subject: String) -> Bool {
+    static func isConventional(_ subject: String) -> Bool {
         subject.wholeMatch(of: pattern) != nil
     }
 

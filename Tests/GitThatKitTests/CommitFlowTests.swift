@@ -197,6 +197,62 @@ private func flow(
     #expect(prompt.contains("type(scope): description"))
 }
 
+// MARK: - Fix 1: persist(style:) from a config WITH NO [commit] table must write the style
+
+/// This is the branch that previously had the value-semantics bug:
+/// the [commit] table did not exist, a new one was created, committed to the
+/// parent BEFORE being populated, so the subsequent `style` write hit a dead copy.
+@Test func persistStyleWhenNoCommitTableExists() async throws {
+    let configURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("test-no-commit-\(UUID().uuidString).toml")
+    defer { try? FileManager.default.removeItem(at: configURL) }
+
+    // Seed a config WITHOUT a [commit] table (exactly what a new user has).
+    try "provider = \"stub\"\n".write(to: configURL, atomically: true, encoding: .utf8)
+
+    let repo = RepoFixture()
+        .commit("initial commit", file: "a.txt", contents: "1")
+        .stage(file: "b.txt", contents: "2")
+    let provider = StubProvider(response: "add thing")
+    let ui = RecordingUI(commitChoices: [.accept], styleChoices: [.plain])
+    _ = try await flow(repo: repo, provider: provider, ui: ui, style: .auto,
+                       configPath: configURL).run()
+
+    // Config.load must read back exactly the style that was chosen.
+    let loaded = try Config.load(globalPath: nil, repositoryPath: configURL)
+    #expect(loaded.commit.style == .plain)
+}
+
+/// Comments and hand-formatting must survive a persist() call.
+@Test func persistPreservesCommentsAndFormatting() async throws {
+    let configURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("test-comments-\(UUID().uuidString).toml")
+    defer { try? FileManager.default.removeItem(at: configURL) }
+
+    let original = """
+        # Team config — do not machine-edit
+        provider = "stub"
+        # end of file
+        """
+    try original.write(to: configURL, atomically: true, encoding: .utf8)
+
+    let repo = RepoFixture()
+        .commit("initial commit", file: "a.txt", contents: "1")
+        .stage(file: "b.txt", contents: "2")
+    let provider = StubProvider(response: "add thing")
+    let ui = RecordingUI(commitChoices: [.accept], styleChoices: [.conventional])
+    _ = try await flow(repo: repo, provider: provider, ui: ui, style: .auto,
+                       configPath: configURL).run()
+
+    let result = try String(contentsOf: configURL, encoding: .utf8)
+    // Comments must be intact.
+    #expect(result.contains("# Team config — do not machine-edit"))
+    #expect(result.contains("# end of file"))
+    // Style must be written.
+    let loaded = try Config.load(globalPath: nil, repositoryPath: configURL)
+    #expect(loaded.commit.style == .conventional)
+}
+
 // MARK: - Fix 1: persist(style:) must not duplicate [commit] on second run
 
 @Test func persistTwiceThenLoadSucceeds() async throws {
@@ -223,6 +279,75 @@ private func flow(
                        configPath: configURL).run()
 
     // Third run: Config.load must not throw — duplicate [commit] would cause malformed error
+    let loaded = try Config.load(globalPath: nil, repositoryPath: configURL)
+    #expect(loaded.commit.style == .plain)
+}
+
+// MARK: - Fix 3 (round 2): persist(style:) must scope edits to [commit] table only
+
+/// Failure input 1: style key exists under a DIFFERENT table.
+/// The [rewrite] table's line must be untouched; [commit].style must be set.
+@Test func persistDoesNotClobberStyleInOtherTables() async throws {
+    let configURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("test-othertable-\(UUID().uuidString).toml")
+    defer { try? FileManager.default.removeItem(at: configURL) }
+
+    // [rewrite] contains a `style` key; [commit] has no style yet.
+    let original = """
+        [rewrite]
+        style = "x"
+
+        [commit]
+        subject_case = "lower"
+        """
+    try original.write(to: configURL, atomically: true, encoding: .utf8)
+
+    let repo = RepoFixture()
+        .commit("initial commit", file: "a.txt", contents: "1")
+        .stage(file: "b.txt", contents: "2")
+    let provider = StubProvider(response: "add thing")
+    let ui = RecordingUI(commitChoices: [.accept], styleChoices: [.plain])
+    _ = try await flow(repo: repo, provider: provider, ui: ui, style: .auto,
+                       configPath: configURL).run()
+
+    let result = try String(contentsOf: configURL, encoding: .utf8)
+    // The [rewrite] section must be completely untouched.
+    #expect(result.contains("[rewrite]\nstyle = \"x\""))
+    // [commit].style must now be readable.
+    let loaded = try Config.load(globalPath: nil, repositoryPath: configURL)
+    #expect(loaded.commit.style == .plain)
+}
+
+/// Failure input 2: a `style = ...` line inside a multi-line string must not be rewritten.
+/// TOML multi-line strings use triple-quotes; we embed a bare style line inside one.
+@Test func persistDoesNotRewriteStyleInsideMultiLineString() async throws {
+    let configURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("test-mlstring-\(UUID().uuidString).toml")
+    defer { try? FileManager.default.removeItem(at: configURL) }
+
+    // The note field contains a line that looks like a style assignment.
+    // [commit] has no real style key.
+    let original = """
+        [commit]
+        note = \"\"\"
+        style = "fake"
+        \"\"\"
+        subject_case = "lower"
+        """
+    try original.write(to: configURL, atomically: true, encoding: .utf8)
+
+    let repo = RepoFixture()
+        .commit("initial commit", file: "a.txt", contents: "1")
+        .stage(file: "b.txt", contents: "2")
+    let provider = StubProvider(response: "add thing")
+    let ui = RecordingUI(commitChoices: [.accept], styleChoices: [.plain])
+    _ = try await flow(repo: repo, provider: provider, ui: ui, style: .auto,
+                       configPath: configURL).run()
+
+    let result = try String(contentsOf: configURL, encoding: .utf8)
+    // The embedded line must not have been changed.
+    #expect(result.contains("style = \"fake\""))
+    // And a real style key must now be present too.
     let loaded = try Config.load(globalPath: nil, repositoryPath: configURL)
     #expect(loaded.commit.style == .plain)
 }

@@ -1,0 +1,9 @@
+# GITTHAT is developed using GITTHAT. This file is both real configuration and
+# the worked example the documentation refers to.
+
+[commit]
+style        = "conventional"
+subject_case = "lower"
+
+[rewrite]
+verify = "swift test"

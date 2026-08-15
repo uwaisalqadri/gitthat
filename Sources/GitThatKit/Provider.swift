@@ -62,10 +62,9 @@ public struct CLIProvider: Provider {
             throw ProviderError.notFound(command: executable)
         }
 
-        // Place the child in its own process group so that kill(-pid, SIGKILL) below
-        // can kill the entire group (including grandchildren like a shell's sleep child).
-        // ponytail: small TOCTOU window between run() and setpgid; acceptable for a CLI tool.
-        setpgid(process.processIdentifier, process.processIdentifier)
+        // Foundation's Process already makes the child its own process group leader,
+        // so kill(-pid, SIGTERM/SIGKILL) below reaps grandchildren without any
+        // explicit setpgid() call here.
 
         // Fix (3): write stdin off the calling thread so a full pipe (64KB on macOS)
         // cannot block complete() before the timeout race even starts.

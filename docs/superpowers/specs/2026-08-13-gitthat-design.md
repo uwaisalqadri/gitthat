@@ -198,8 +198,9 @@ Selection resolves in this order, first match winning:
 
 1. `--conventional` / `--plain` on the invocation, for a one-off override.
 2. `commit.style` in `./.gitthat.toml`, then `~/.config/gitthat/config.toml`.
-3. Inference from the last 20 subjects. If at least 70% parse as Conventional
-   Commits, `conventional` is used; otherwise `plain`.
+3. Inference from the last 20 subjects. At least 70% parsing as Conventional
+   Commits selects `conventional`; 30% or fewer selects `plain`. A ratio
+   between the two is treated as ambiguous and falls through to step 4.
 4. If history is ambiguous — mixed, or fewer than five commits — GITTHAT asks
    once, then writes the answer to `./.gitthat.toml` so the repo is settled and
    the team inherits it.

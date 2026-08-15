@@ -54,7 +54,7 @@ public struct TerminalUI: UserInterface {
             print("\n   [a]ccept  [e]dit  [r]egenerate  [c]ancel: ", terminator: "")
             guard let line = readLine() else { return .cancel } // EOF: treat as cancel
             switch line.trimmingCharacters(in: .whitespaces).lowercased() {
-            case "a", "": return .accept
+            case "a":     return .accept
             case "e":     return .edit
             case "r":     return .regenerate
             case "c":     return .cancel

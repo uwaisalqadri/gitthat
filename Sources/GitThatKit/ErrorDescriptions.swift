@@ -37,7 +37,7 @@ extension ProviderError: LocalizedError {
     }
 
     /// Scans PATH for known agent CLIs and returns the ones found.
-    static func scanPath() -> [String] {
+    public static func scanPath() -> [String] {
         let known = ["claude", "codex", "gemini", "ollama", "opencode"]
         let paths = ProcessInfo.processInfo.environment["PATH"]?
             .split(separator: ":").map(String.init) ?? []
@@ -112,6 +112,41 @@ extension GitRunnerError: LocalizedError {
         switch self {
         case .couldNotLaunch(let reason):
             return "Could not launch git: \(reason). Ensure git is installed and on PATH."
+        }
+    }
+}
+
+extension RewriteFlowError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .notARepository:
+            return "Not a git repository. Run 'git init' to create one, or change to a directory that is already a repository."
+        case .crossBranchRequest(let detail):
+            return detail
+        case .dirtyTree:
+            return "Working tree has uncommitted changes. Commit or stash them first, or add 'autostash = true' under [rewrite] in .gitthat.toml."
+        case .planRejected(let raw):
+            return "The agent returned a plan that could not be applied.\nRaw output:\n\(raw)"
+        case .missingBinaryPath:
+            return "Could not resolve the path to the gitthat binary. Run gitthat from its installed location."
+        }
+    }
+}
+
+
+extension SafetyError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .dirtyTree:
+            return "Working tree has uncommitted changes. Commit or stash them first."
+        case .noUpstreamAndNoDefaultBranch:
+            return "Could not determine the commit range: no upstream tracking branch and no default branch (main/master) found. Set an upstream with 'git branch --set-upstream-to=<remote>/<branch>'."
+        case .emptyRange:
+            return "No commits to rewrite in the current range."
+        case .detachedHead:
+            return "HEAD is detached. Check out a branch first: 'git checkout -b <name>'"
+        case .unbornHead:
+            return "No commits yet. Make at least one commit first."
         }
     }
 }

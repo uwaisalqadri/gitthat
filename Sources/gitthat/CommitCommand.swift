@@ -33,11 +33,40 @@ struct CommitCommand: AsyncParsableCommand {
 
         let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let repositoryConfig = directory.appendingPathComponent(".gitthat.toml")
+        let globalPath = Config.defaultGlobalPath()
+
+        // First-run detection: no config file exists anywhere on disk.
+        // Scan PATH for known agent CLIs and auto-select the first found.
+        let noConfig = !FileManager.default.fileExists(atPath: globalPath.path)
+                    && !FileManager.default.fileExists(atPath: repositoryConfig.path)
+        if noConfig {
+            let found = ProviderError.scanPath()
+            guard let first = found.first else {
+                fputs("""
+                    Error: No config file found and no known agent CLI detected on PATH.
+                    Install one of: claude, codex, gemini, ollama, opencode
+                    Then run again, or create .gitthat.toml with: provider = "<name>"
+                    """, stderr)
+                fputs("\n", stderr)
+                throw ExitCode(1)
+            }
+            print("   Auto-selected provider: \(first) (no config found)")
+        }
 
         var config = try Config.load(
-            globalPath: Config.defaultGlobalPath(),
+            globalPath: globalPath,
             repositoryPath: repositoryConfig
         )
+
+        // Override provider with auto-detected one when no config was present.
+        if noConfig, let first = ProviderError.scanPath().first {
+            config = Config(
+                provider: first,
+                providers: [first: ProviderConfig(command: [first, "-p"], timeout: 60)],
+                commit: config.commit,
+                rewrite: config.rewrite
+            )
+        }
 
         if conventional || plain {
             config = Config(

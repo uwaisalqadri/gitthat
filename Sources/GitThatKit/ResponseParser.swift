@@ -47,7 +47,7 @@ public enum ResponseParser {
         return CommitMessage(subject: subject, body: body.isEmpty ? nil : body)
     }
 
-    public static func stripFences(_ raw: String) -> String {
+    static func stripFences(_ raw: String) -> String {
         let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
         let isFence = { (line: Substring) in
             line.trimmingCharacters(in: .whitespaces).hasPrefix("```")
