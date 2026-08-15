@@ -1,4 +1,4 @@
-public enum SubjectCaseSetting: String, Sendable, Codable {
+public enum SubjectCaseSetting: String, Sendable, Codable, CaseIterable {
     case lower
     case preserve
 }

@@ -5,7 +5,7 @@ public enum CommitStyle: String, Sendable, Codable {
     case plain
 }
 
-public enum StyleSetting: String, Sendable, Codable {
+public enum StyleSetting: String, Sendable, Codable, CaseIterable {
     case auto
     case conventional
     case plain
