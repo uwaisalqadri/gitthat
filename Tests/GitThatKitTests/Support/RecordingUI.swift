@@ -11,6 +11,7 @@ final class RecordingUI: UserInterface, @unchecked Sendable {
     private var styleChoices: [CommitStyle]
     private var confirmations: [Bool]
     var editResult: String?
+    var editError: UIError?
     private(set) var shown: [String] = []
     private(set) var questions: [String] = []
 
@@ -48,7 +49,10 @@ final class RecordingUI: UserInterface, @unchecked Sendable {
         }
     }
 
-    func edit(_ text: String) throws -> String { editResult ?? text }
+    func edit(_ text: String) throws -> String {
+        if let editError { throw editError }
+        return editResult ?? text
+    }
 
     var allOutput: String { lock.withLock { shown.joined(separator: "\n") } }
 }

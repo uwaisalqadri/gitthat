@@ -6,7 +6,6 @@ public struct StagedDiff: Sendable, Equatable {
 }
 
 public enum GitError: Error, Equatable {
-    case notARepository
     case commandFailed(command: String, stderr: String)
 }
 
