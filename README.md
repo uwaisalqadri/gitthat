@@ -1,4 +1,4 @@
-# GITTHAT
+# <img width="500" alt="Frame 110" src="https://github.com/user-attachments/assets/43b85a36-6758-423a-b5ea-d31a344c9673" />
 
 **Rewrite history without remembering how.**
 
