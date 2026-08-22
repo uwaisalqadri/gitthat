@@ -26,7 +26,7 @@ import Testing
     let message = CommitMessage(subject: "feat: x", body: "a body")
     let rendered = Render.commitPreview(message, branch: "main").lowercased()
 
-    for word in ["rebase", "squash", "fixup"] {
+    for word in ["rebase", "squash", "fixup", "pick", "todo"] {
         #expect(!rendered.contains(word))
     }
 }
@@ -52,6 +52,17 @@ import Testing
 @Test func recordingUIEmptyConfirmationsReturnsFalse() {
     let ui = RecordingUI(confirmations: [])
     #expect(ui.confirm("proceed?") == false)
+}
+
+// MARK: - ANSI TTY guard (B6)
+
+/// When stdout is not a TTY (as in test runs), ANSI escapes must be absent from rendered output.
+/// In test runs, STDOUT_FILENO is a pipe, so isatty() returns 0 → escapes should be empty strings.
+@Test func ansiEscapesAbsentWhenNotTTY() {
+    // Tests run with stdout piped, so Render.isTTY is false → dim/bold/reset are "".
+    let message = CommitMessage(subject: "feat: x", body: nil)
+    let rendered = Render.commitPreview(message, branch: "main")
+    #expect(!rendered.contains("\u{001B}["))
 }
 
 // MARK: - Multi-word $EDITOR support (finding 1)

@@ -215,9 +215,14 @@ public struct Git: Sendable {
     }
 
     /// Runs `git rebase -i <baseSha>` (or `--root` when baseSha is nil) with the given
-    /// environment additions. Returns the exit code — non-zero may mean conflict.
-    public func rewriteInteractive(baseSha: String?, autostash: Bool = false, environment: [String: String]) throws -> Int32 {
+    /// environment additions. Returns the exit code and stderr — non-zero may mean conflict
+    /// OR a real failure; callers must discriminate with `rewriteInProgress()`.
+    public func rewriteInteractive(baseSha: String?, autostash: Bool = false, environment: [String: String]) throws -> (exitCode: Int32, stderr: String) {
         var env = ProcessInfo.processInfo.environment
+        // Apply the runner's environment overrides first: this process spawns git
+        // directly rather than going through runner.run, so without this it would
+        // escape the isolation (e.g. GIT_CONFIG_GLOBAL) every other call receives.
+        for (k, v) in runner.environment { env[k] = v }
         for (k, v) in environment { env[k] = v }
         env["GIT_TERMINAL_PROMPT"] = "0"
         if autostash { env[GitVocabulary.envRebaseAutostash] = "true" }
@@ -247,7 +252,8 @@ public struct Git: Sendable {
 
         do { try process.run() } catch { throw GitRunnerError.couldNotLaunch(error.localizedDescription) }
         process.waitUntilExit()
-        return process.terminationStatus
+        let stderr = (try? Data(contentsOf: errorURL)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        return (exitCode: process.terminationStatus, stderr: stderr)
     }
 
     /// Continues an in-progress interactive rewrite session.

@@ -22,10 +22,21 @@ public protocol GitRunner: Sendable {
     /// Runs git and returns its result. A non-zero exit is a result, not an error —
     /// only failure to launch the process throws.
     func run(_ arguments: [String], in directory: URL, stdin: String?) throws -> GitResult
+
+    /// Environment overrides this runner applies to every git process it launches.
+    /// Callers that spawn git themselves (e.g. the interactive rewrite) must apply
+    /// these too, or they escape the isolation every other call gets.
+    var environment: [String: String] { get }
+}
+
+public extension GitRunner {
+    var environment: [String: String] { [:] }
 }
 
 public struct SystemGitRunner: GitRunner {
     private let environmentOverrides: [String: String]
+
+    public var environment: [String: String] { environmentOverrides }
 
     public init(environmentOverrides: [String: String] = [:]) {
         self.environmentOverrides = environmentOverrides

@@ -5,7 +5,7 @@ import Testing
 /// Git's internal vocabulary must not reach the user. Rebasing means moving
 /// work onto a different base, which GITTHAT cannot do, and `squash`/`fixup`
 /// are todo-file verbs the user never sees.
-private let forbiddenWords = ["rebase", "squash", "fixup"]
+private let forbiddenWords = ["rebase", "squash", "fixup", "pick", "todo"]
 
 private func assertClean(_ text: String, _ label: String, sourceLocation: SourceLocation = #_sourceLocation) {
     let lowered = text.lowercased()
@@ -88,21 +88,23 @@ func providerErrorsAreClean(error: ProviderError) {
             let tripleCount = trimmed.components(separatedBy: "\"\"\"").count - 1
             if tripleCount % 2 == 1 { inMultilineString.toggle() }
 
-            // Skip full-line comments. Trailing comments are stripped below.
+            // Skip full-line comments.
             guard !trimmed.hasPrefix("//") else { continue }
 
-            // Must be inside a string (single-line or multi-line) to matter.
-            guard inMultilineString || trimmed.contains("\"") else { continue }
-
-            // Strip trailing // comment, but only when it falls outside a string.
-            // ponytail: naive scan — a string containing "//" (e.g. a URL) can
-            // cause early truncation, but no such string exists in this source
-            // tree today. Full solution: a proper Swift lexer.
             let scanTarget: String
-            if !inMultilineString, let commentRange = trailingCommentRange(in: trimmed) {
-                scanTarget = String(trimmed[trimmed.startIndex..<commentRange.lowerBound])
-            } else {
+            if inMultilineString {
+                // Inside a multi-line string: the whole (non-comment) line is literal content.
                 scanTarget = trimmed
+            } else {
+                // Single-line: only scan actual string literal contents, not identifiers or
+                // surrounding code. extractStringLiteralContents returns the concatenated
+                // content of every "..." on this line, comment-stripped.
+                // ponytail: naive scan — a string containing "//" (e.g. a URL) can
+                // cause early truncation, but no such string exists in this source
+                // tree today. Full solution: a proper Swift lexer.
+                guard trimmed.contains("\"") else { continue }
+                scanTarget = extractStringLiteralContents(trimmed)
+                guard !scanTarget.isEmpty else { continue }
             }
 
             let lowered = scanTarget.lowercased()
@@ -114,15 +116,15 @@ func providerErrorsAreClean(error: ProviderError) {
     }
 }
 
-/// Proves the lint engine rejects a forbidden word in a non-exempt file.
-/// Uses a temporary .swift file containing a string literal with "rebase",
+/// Proves the lint engine rejects forbidden words (including the newly added pick/todo) in a non-exempt file.
+/// Uses a temporary .swift file containing string literals with "pick" and "todo",
 /// then runs the same scan logic used by sourceFilesContainNoForbiddenUserFacingStrings
-/// and confirms it produces at least one violation.
+/// and confirms it produces violations for both words.
 @Test func lintRejectsNonExemptFileWithForbiddenWord() throws {
     let tmp = FileManager.default.temporaryDirectory
         .appendingPathComponent("LintCanFail-\(UUID().uuidString).swift")
-    // Write a .swift file with a string literal containing the forbidden word.
-    let source = #"let x = "Do not rebase this branch""#
+    // Write a .swift file with string literals containing newly-added forbidden words.
+    let source = "let x = \"Do not pick this commit\"\nlet y = \"todo list\""
     try source.write(to: tmp, atomically: true, encoding: .utf8)
     defer { try? FileManager.default.removeItem(at: tmp) }
 
@@ -134,12 +136,13 @@ func providerErrorsAreClean(error: ProviderError) {
         let tripleCount = trimmed.components(separatedBy: "\"\"\"").count - 1
         if tripleCount % 2 == 1 { inMultilineString.toggle() }
         guard !trimmed.hasPrefix("//") else { continue }
-        guard inMultilineString || trimmed.contains("\"") else { continue }
         let scanTarget: String
-        if !inMultilineString, let commentRange = trailingCommentRange(in: trimmed) {
-            scanTarget = String(trimmed[trimmed.startIndex..<commentRange.lowerBound])
-        } else {
+        if inMultilineString {
             scanTarget = trimmed
+        } else {
+            guard trimmed.contains("\"") else { continue }
+            scanTarget = extractStringLiteralContents(trimmed)
+            guard !scanTarget.isEmpty else { continue }
         }
         let lowered = scanTarget.lowercased()
         for word in forbiddenWords where lowered.contains(word) {
@@ -149,27 +152,41 @@ func providerErrorsAreClean(error: ProviderError) {
     #expect(!violations.isEmpty, "expected lint to flag the injected forbidden word but found no violations")
 }
 
-/// Returns the range of a trailing `//` comment that lies outside string
-/// literals, or nil if there is no such comment on the line.
-private func trailingCommentRange(in line: String) -> Range<String.Index>? {
+/// Extracts and concatenates the contents of all double-quoted string literals
+/// on a single non-multi-line-string line (after stripping trailing comments).
+/// Identifiers, operators, and other code are excluded.
+/// ponytail: handles only basic strings; raw strings and interpolations are not
+/// decomposed further, but their content is still scanned as-is.
+private func extractStringLiteralContents(_ line: String) -> String {
+    var result = ""
     var inString = false
     var i = line.startIndex
     while i < line.endIndex {
         let c = line[i]
         if c == "\\" && inString {
-            // skip escaped character
+            // Skip escaped char — include it in literal content to preserve sequences like \n.
             let next = line.index(after: i)
-            if next < line.endIndex { i = line.index(after: next) } else { break }
+            if next < line.endIndex {
+                result.append(c)
+                result.append(line[next])
+                i = line.index(after: next)
+            } else {
+                break
+            }
             continue
         }
-        if c == "\"" { inString.toggle() }
+        if c == "\"" {
+            inString.toggle()
+            i = line.index(after: i)
+            continue
+        }
+        // Trailing comment outside string — stop.
         if !inString && c == "/" {
             let next = line.index(after: i)
-            if next < line.endIndex && line[next] == "/" {
-                return i..<line.endIndex
-            }
+            if next < line.endIndex && line[next] == "/" { break }
         }
+        if inString { result.append(c) }
         i = line.index(after: i)
     }
-    return nil
+    return result
 }

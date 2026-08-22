@@ -14,7 +14,15 @@ enum GitVocabulary {
     // Todo-file short-form verbs (git reads these directly; users never see them).
     static let todoSquash = "squash"
     static let todoFixup  = "fixup"
+    // The `pick` verb is the git todo-file default (keep a commit as-is);
+    // GITTHAT renders it as the short form "p" in TodoFile.swift.
+    static let todoPick   = "pick"
+    // The `todo` noun names git's rebase instruction file; we use "p/r/s/f" not the word.
+    static let todoNoun   = "todo"
 
     // Environment variable names that contain git's vocabulary.
     static let envRebaseAutostash = "GIT_REBASE_AUTOSTASH"
+
+    // Git writes "cherry-pick: <subject>" into the reflog; UndoFlow.swift matches this prefix.
+    static let cherryPickPrefix = "cherry-pick: "
 }

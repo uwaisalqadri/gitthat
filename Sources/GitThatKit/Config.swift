@@ -5,6 +5,7 @@ public enum ConfigError: Error, Equatable {
     case unknownProvider(name: String, available: [String])
     case malformed(String)
     case invalidValue(key: String, value: String, allowed: [String])
+    case unreadable(path: String, reason: String)
 }
 
 public struct ProviderConfig: Sendable, Equatable {
@@ -68,11 +69,18 @@ public struct Config: Sendable, Equatable {
 
     /// Loads global defaults and overlays the repository file on top, per key.
     /// A missing file contributes nothing and is not an error.
+    /// An unreadable file (exists but cannot be read) throws `ConfigError.unreadable`.
     public static func load(globalPath: URL?, repositoryPath: URL?) throws -> Config {
         var config = Config.defaults
         for path in [globalPath, repositoryPath] {
-            guard let path, let text = try? String(contentsOf: path, encoding: .utf8) else {
-                continue
+            guard let path else { continue }
+            // Missing file: skip silently. Unreadable file: throw to surface the problem.
+            if !FileManager.default.fileExists(atPath: path.path) { continue }
+            let text: String
+            do {
+                text = try String(contentsOf: path, encoding: .utf8)
+            } catch {
+                throw ConfigError.unreadable(path: path.path, reason: error.localizedDescription)
             }
             config = try overlay(text, onto: config)
         }
@@ -131,10 +139,24 @@ public struct Config: Sendable, Equatable {
             subjectCase = base.commit.subjectCase
         }
 
+        let maxSubject: Int
+        if let rawMax = commitTable?["max_subject"] {
+            guard let intMax = rawMax.int else {
+                throw ConfigError.invalidValue(
+                    key: "commit.max_subject",
+                    value: rawMax.string ?? String(describing: rawMax),
+                    allowed: ["integer"]
+                )
+            }
+            maxSubject = intMax
+        } else {
+            maxSubject = base.commit.maxSubject
+        }
+
         let commit = CommitConfig(
             style: style,
             subjectCase: subjectCase,
-            maxSubject: commitTable?["max_subject"]?.int ?? base.commit.maxSubject
+            maxSubject: maxSubject
         )
 
         let rewriteTable = table["rewrite"]?.table

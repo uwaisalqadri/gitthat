@@ -71,9 +71,13 @@ public struct CLIProvider: Provider {
         // Use Darwin.write with F_SETNOSIGPIPE so a broken-pipe write returns EPIPE
         // instead of raising SIGPIPE or an NSException (which NSConcreteFileHandle
         // throws when the child exits before reading all of stdin).
+        // A dedicated Thread rather than DispatchQueue.global(): the child blocks
+        // reading stdin until this write happens, so if it were queued behind other
+        // blocked work the child would never exit and the timeout would fire on a
+        // command that was merely waiting for its input.
         let promptData = Data(prompt.utf8)
         let writeHandle = inputPipe.fileHandleForWriting
-        DispatchQueue.global().async {
+        let stdinThread = Thread {
             let fd = writeHandle.fileDescriptor
             // Suppress SIGPIPE on this specific fd; write returns EPIPE instead.
             _ = fcntl(fd, F_SETNOSIGPIPE, 1)
@@ -87,6 +91,8 @@ public struct CLIProvider: Provider {
             }
             try? writeHandle.close()
         }
+        stdinThread.stackSize = 512 * 1024
+        stdinThread.start()
 
         try await waitForExit(of: process)
 
@@ -119,23 +125,48 @@ public struct CLIProvider: Provider {
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
                 await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    // waitUntilExit blocks, so it runs off the cooperative pool.
-                    DispatchQueue.global().async {
+                    // waitUntilExit blocks, so it must not run on the cooperative pool.
+                    // It also must not run on DispatchQueue.global(): that pool grows
+                    // slowly, so under load the wait can sit queued for seconds and lose
+                    // the race to the timeout task even though the child already exited —
+                    // reporting a spurious .timedOut for a command that succeeded.
+                    // A dedicated Thread is always schedulable immediately.
+                    let thread = Thread {
                         process.waitUntilExit()
                         continuation.resume()
                     }
+                    thread.stackSize = 512 * 1024
+                    thread.start()
                 }
             }
             group.addTask {
-                try await Task.sleep(for: timeout)
+                // Use Thread.sleep (non-cooperative, kernel-scheduled) for the timeout
+                // wait instead of Task.sleep (cooperative). Under CPU saturation from
+                // concurrent git rebases, Task.sleep has been observed to delay > 200s
+                // for a 1-second timeout — the kernel scheduler still runs dedicated
+                // Threads regardless of how occupied the cooperative pool is.
+                //
+                // Pattern: sleep on a Thread, then resume a plain (non-throwing)
+                // continuation so the timeout logic runs on the cooperative pool AFTER
+                // the sleep. Task.checkCancellation() after the sleep ensures no
+                // double-resume if the process exits first (task 1 wins, task 2 is
+                // cancelled, checkCancellation throws CancellationError, group discards it).
+                // ponytail: Thread.sleep; switch to clock_nanosleep if sub-ms precision needed.
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    let thread = Thread {
+                        Thread.sleep(forTimeInterval: Double(seconds))
+                        continuation.resume()
+                    }
+                    thread.stackSize = 64 * 1024
+                    thread.start()
+                }
+                // Fast-fail if the process already exited (task 1 cancelled us).
+                try Task.checkCancellation()
                 let pid = process.processIdentifier
-                // SIGTERM to the whole process group so grandchildren (e.g. shell's children) also get it.
+                // SIGTERM to the whole process group so grandchildren also get it.
                 kill(-pid, SIGTERM)
-                // Schedule SIGKILL escalation on a background thread so the timeout
-                // throw is immediate and the grace period does not delay the caller.
-                // Guard isRunning before kill() — a recycled PID would be worse.
+                // SIGKILL escalation after 2s grace on DispatchQueue (fire-and-forget).
                 DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                    // kill(-pid) targets the process group, cleaning up any grandchildren.
                     if process.isRunning { kill(-pid, SIGKILL) }
                 }
                 throw ProviderError.timedOut(seconds: seconds)

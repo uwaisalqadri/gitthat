@@ -20,10 +20,10 @@ public protocol UserInterface: Sendable {
 }
 
 public enum Render {
-    // ponytail: ANSI escapes emitted unconditionally; strip when !isatty(STDOUT_FILENO) if piped-output cleanliness matters
-    private static let dim = "\u{001B}[2m"
-    private static let bold = "\u{001B}[1m"
-    private static let reset = "\u{001B}[0m"
+    private static let isTTY = isatty(STDOUT_FILENO) == 1
+    private static let dim   = isTTY ? "\u{001B}[2m"  : ""
+    private static let bold  = isTTY ? "\u{001B}[1m"  : ""
+    private static let reset = isTTY ? "\u{001B}[0m"  : ""
 
     public static func commitPreview(_ message: CommitMessage, branch: String?) -> String {
         var lines: [String] = []

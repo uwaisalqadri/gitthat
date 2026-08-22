@@ -26,23 +26,21 @@ struct EditMessageCommand: ParsableCommand {
 
         let queueURL = URL(fileURLWithPath: queuePath)
         let data = (try? Data(contentsOf: queueURL)) ?? Data()
-        let entries = data.split(separator: 0, omittingEmptySubsequences: false) // NUL = 0; must NOT skip empty entries or queue position desyncs
+        var entries = TodoFile.deserialiseQueue(data)
 
-        guard let first = entries.first else {
+        guard !entries.isEmpty else {
             return // queue exhausted: git's own message stands
         }
 
-        // Write the message (strip trailing NUL if any)
-        let messageURL = URL(fileURLWithPath: messagePath)
-        try first.write(to: messageURL)
+        let first = entries.removeFirst()
 
-        // Rewrite queue without the consumed entry
-        let rest = entries.dropFirst()
-        var newQueue = Data()
-        for (i, entry) in rest.enumerated() {
-            newQueue.append(contentsOf: entry)
-            if i < rest.count - 1 { newQueue.append(0) }
+        // Only overwrite git's file for .write entries; .leave means let git's combined message stand.
+        if case .write(let message) = first {
+            let messageURL = URL(fileURLWithPath: messagePath)
+            try Data(message.utf8).write(to: messageURL)
         }
-        try newQueue.write(to: queueURL)
+
+        // Rewrite queue with the remaining entries.
+        try TodoFile.serialiseQueue(entries).write(to: queueURL)
     }
 }

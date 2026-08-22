@@ -18,10 +18,10 @@ key, no second subscription.
 
 ---
 
-> **Status: in design.** The specification is complete and the implementation
-> has not started. Nothing below works yet. See
-> [the design spec](docs/superpowers/specs/2026-08-13-gitthat-design.md) for the
-> full detail and [the diagrams](docs/architecture.puml) for the shape of it.
+> **Status: `gitthat commit`, `gitthat rewrite`, and `gitthat undo` are
+> implemented and covered by the test suite.** Conflict resolution during a
+> rewrite is not yet implemented — a rewrite that hits a conflict stops and
+> hands you `gitthat rewrite --resume` or `gitthat rewrite --cancel`.
 
 ---
 
@@ -168,8 +168,8 @@ supported.
 ## Testing
 
 ```sh
-swift test                          # unit, integration, conflicts, failures
-swift test --filter Exhaustive      # every rewrite permutation against real git
+swift test                                        # unit, integration, conflicts, failures (~3 min)
+GITTHAT_EXHAUSTIVE=1 swift test --filter Exhaustive   # every rewrite permutation against real git (~35 min)
 ```
 
 The suite enumerates all `5⁴ × 4! = 15,000` possible rewrite plans over a

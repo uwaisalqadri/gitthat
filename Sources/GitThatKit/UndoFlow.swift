@@ -161,8 +161,8 @@ public struct UndoFlow: Sendable {
         }
 
         // cherry-pick
-        if s.hasPrefix("cherry-pick: ") {
-            let msg = String(s.dropFirst("cherry-pick: ".count))
+        if s.hasPrefix(GitVocabulary.cherryPickPrefix) {
+            let msg = String(s.dropFirst(GitVocabulary.cherryPickPrefix.count))
             return "applied \"\(msg)\""
         }
 

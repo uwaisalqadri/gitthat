@@ -198,11 +198,16 @@ queue_file = os.environ.get('GITTHAT_MESSAGE_QUEUE', '')
 if not queue_file or not os.path.exists(queue_file):
     sys.exit(0)
 data = open(queue_file, 'rb').read()
-entries = [e for e in data.split(b'\\x00') if e]
+# NUL-delimited typed entries: b'W' + message (write) or b'L' (leave)
+entries = data.split(b'\\x00') if data else []
 if not entries:
     sys.exit(0)
-open(msg_file, 'wb').write(entries[0])
-open(queue_file, 'wb').write(b'\\x00'.join(entries[1:]))
+first = entries[0]
+remaining = entries[1:]
+if first.startswith(b'W'):
+    open(msg_file, 'wb').write(first[1:])
+# 'L' entries: leave git's file untouched
+open(queue_file, 'wb').write(b'\\x00'.join(remaining))
 """
         FileManager.default.createFile(atPath: pyPath, contents: Data(py.utf8))
 
@@ -318,26 +323,6 @@ private func runPermutation(_ param: PermParam) async throws {
     let firstSurvivingAction = validated.commits.first { $0.action != .delete }?.action
     if firstSurvivingAction == .combine { return }
 
-    // Skip plans where squash (combineKeep) precedes reword in todo order.
-    // Git calls GIT_EDITOR for both squash and reword, in todo order. The message
-    // queue only contains reword messages. If a squash step comes before a reword step,
-    // the squash consumes the reword's queue entry and the reword gets no message.
-    // This is a known queue-ordering limitation; plans with squash-before-reword
-    // are excluded from execution to keep the suite focused on supported combinations.
-    // ponytail: fix by tagging queue entries with step type if squash+reword is needed.
-    let nonDeleteSteps = validated.commits.filter { $0.action != .delete }
-    var seenCombineKeep = false
-    var hasRewordAfterCombineKeep = false
-    for step in nonDeleteSteps {
-        if step.action == .combine && step.keepMessage == true {
-            seenCombineKeep = true
-        } else if step.action == .reword && seenCombineKeep {
-            hasRewordAfterCombineKeep = true
-            break
-        }
-    }
-    if hasRewordAfterCombineKeep { return }
-
     // Copy the shared fixture so this permutation is fully isolated.
     let repo = base.copy()
 
@@ -369,8 +354,10 @@ private func runPermutation(_ param: PermParam) async throws {
         binaryPath: editMessageScript()
     )
 
-    // Throttle concurrent rebases to avoid file-descriptor exhaustion when many
-    // parallel test cases run simultaneously.
+    // Throttle concurrent rewrites. Each one blocks a DispatchQueue.global() thread
+    // for its whole duration; letting hundreds run at once saturates that pool and
+    // adds seconds of latency to every unrelated dispatch in the process (which is
+    // what made the timing-sensitive ProviderTests appear to hang).
     await rebaseThrottle.acquire()
     let outcome: RewriteOutcome
     do {
@@ -666,9 +653,11 @@ private func encodePlanJSON(_ plan: RewritePlan) -> String {
 
 // MARK: - Default tier real-git tests
 
-// Throttle concurrent git rebases. Each rebase spawns several git subprocesses;
-// too many in parallel exhausts file descriptors on a typical macOS dev machine.
-// ponytail: actor-per-slot pattern; raise maxConcurrent if FD limits allow.
+// Throttle concurrent git rewrites. Each one occupies a DispatchQueue.global()
+// thread until it finishes; libdispatch grows that pool slowly, so an unbounded
+// batch starves every other dispatch in the process — including the timing
+// assertions in ProviderTests. Bounded well below the pool's width.
+// ponytail: actor-per-slot pattern; raise maxConcurrent only if the pool can take it.
 private actor RebaseThrottle {
     private let maxConcurrent: Int
     private var running = 0
@@ -694,7 +683,9 @@ private actor RebaseThrottle {
     }
 }
 
-private let rebaseThrottle = RebaseThrottle(maxConcurrent: 4)
+// ponytail: 2 concurrent rebases keeps CPU headroom for the cooperative pool (ProviderTests).
+// Raise to 4 only when ProviderTests and the exhaustive tier don't share a test run.
+private let rebaseThrottle = RebaseThrottle(maxConcurrent: 2)
 
 @Suite("DefaultTier")
 struct DefaultTierTests {
@@ -742,7 +733,7 @@ struct DefaultTierTests {
 
 // MARK: - Exhaustive tier (--filter Exhaustive)
 
-@Suite("ExhaustiveTier")
+@Suite("ExhaustiveTier", .enabled(if: ProcessInfo.processInfo.environment["GITTHAT_EXHAUSTIVE"] == "1"))
 struct ExhaustiveTierTests {
 
     @Test(

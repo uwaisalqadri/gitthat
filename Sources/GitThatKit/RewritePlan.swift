@@ -58,35 +58,12 @@ public extension RewritePlan {
     /// Tolerates bare JSON, fenced JSON, fenced with a language tag, and preamble prose before a fence.
     /// Throws `PlanError.notJSON(rawText)` on parse failure so the caller can surface it to the user.
     static func decode(_ raw: String) throws -> RewritePlan {
-        // Try candidates in order: extract from first fence block found anywhere in the text,
-        // then fall back to ResponseParser.stripFences (handles bare JSON and simple fenced JSON).
-        for candidate in [extractFirstFenceContent(raw), ResponseParser.stripFences(raw)] {
-            let text = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let data = text.data(using: .utf8),
-               let plan = try? JSONDecoder().decode(RewritePlan.self, from: data) {
-                return plan
-            }
+        let text = ResponseParser.stripFences(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        if let data = text.data(using: .utf8),
+           let plan = try? JSONDecoder().decode(RewritePlan.self, from: data) {
+            return plan
         }
         throw PlanError.notJSON(raw)
-    }
-
-    /// Finds the first opening ``` fence (with optional language tag) and returns everything
-    /// between it and the next closing ``` fence. Returns the original string if none found.
-    ///
-    /// ponytail: When `ResponseParser.stripFences` gains preamble handling (Plan 2, Task 9),
-    /// delete this function and simplify `decode` to a single `ResponseParser.stripFences` call.
-    private static func extractFirstFenceContent(_ raw: String) -> String {
-        let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
-        let isFence = { (line: Substring) in line.trimmingCharacters(in: .whitespaces).hasPrefix("```") }
-
-        guard let open = lines.firstIndex(where: isFence) else { return raw }
-        let after = lines.index(after: open)
-        guard after < lines.endIndex else { return raw }
-        let remaining = lines[after...]
-        if let close = remaining.firstIndex(where: isFence) {
-            return remaining[..<close].joined(separator: "\n")
-        }
-        return remaining.joined(separator: "\n")
     }
 
     /// Validates the plan against a commit range. Throws the first violation found.

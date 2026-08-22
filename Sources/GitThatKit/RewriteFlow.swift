@@ -17,6 +17,9 @@ public enum RewriteFlowError: Error, Equatable {
     /// Thrown when a plan contains reword steps but the binary path cannot be resolved,
     /// which would otherwise cause git to open the user's real editor and hang.
     case missingBinaryPath
+    /// Thrown when the history rewrite process exits non-zero but left no in-progress state,
+    /// meaning the failure is not a conflict the user can resolve — it is a real error.
+    case rewriteFailed(stderr: String, backupRef: String)
 }
 
 // MARK: - RewriteFlow
@@ -129,10 +132,16 @@ public struct RewriteFlow: Sendable {
         // 8. Backup ref — only here does git get touched
         let backupRef = try safety.createBackupRef()
 
-        // 9. Write todo + queue files; run rebase
+        // 9. Write todo + queue files; run rebase.
+        // The rewrite blocks on waitUntilExit for as long as git takes. Doing that
+        // directly here would hold a cooperative-pool thread (one per core) for the
+        // whole rewrite, starving every other async task in the process. Hand it to
+        // a dedicated thread so only that thread blocks.
         let todo = TodoFile.render(plan)
         let queue = TodoFile.messageQueue(plan)
-        let conflicted = try runRebase(baseSha: range.baseSha, todo: todo, queue: queue, autostash: autostash)
+        let conflicted = try await runBlocking {
+            try runRebase(baseSha: range.baseSha, todo: todo, queue: queue, autostash: autostash, backupRef: backupRef)
+        }
 
         // 10. Conflict
         if conflicted {
@@ -179,67 +188,82 @@ public struct RewriteFlow: Sendable {
     }
 
     /// Writes the todo and queue files to temp paths, then runs the interactive rebase.
-    /// Returns true when the rebase ended with a conflict (non-zero exit), false on success.
-    private func runRebase(baseSha: String?, todo: String, queue: [String], autostash: Bool) throws -> Bool {
+    /// Returns true when the rebase ended with a genuine conflict (non-zero exit AND in-progress
+    /// state was left behind), false on clean success. Throws `rewriteFailed` when git exits
+    /// non-zero but leaves no in-progress state — that is a real failure, not a conflict.
+    private func runRebase(baseSha: String?, todo: String, queue: [TodoFile.QueueEntry], autostash: Bool, backupRef: String) throws -> Bool {
         // Whether git will call GIT_EDITOR: reword steps (r) and squash steps (s) both invoke it.
         // fixup (f) does not. We must set GIT_EDITOR any time git might open an editor.
         let todoLines = todo.split(separator: "\n", omittingEmptySubsequences: true)
         let hasEditorStep = todoLines.contains { $0.hasPrefix("r ") || $0.hasPrefix("s ") }
 
-        // Guard: if there are reword steps but no binary path, git will open the user's real
-        // editor and hang forever — throw early before touching git.
-        if !queue.isEmpty && binaryPath == nil {
-            throw RewriteFlowError.missingBinaryPath
-        }
-        // Also guard squash steps — they too invoke the editor (for the combined message).
-        if hasEditorStep && queue.isEmpty && binaryPath == nil {
+        // Guard: if there are editor-invoking steps but no binary path, git will open the user's
+        // real editor and hang forever — throw early before touching git.
+        if hasEditorStep && binaryPath == nil {
             throw RewriteFlowError.missingBinaryPath
         }
 
-        // Write todo to a temp file. GIT_SEQUENCE_EDITOR reads GITTHAT_TODO_FILE and copies it.
+        // Write the sequence file to a temp path. GIT_SEQUENCE_EDITOR reads GITTHAT_SEQ_FILE and copies it.
         // Using a file avoids any quoting/newline issue — the path is the only thing in the command.
         let todoFileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("gitthat-todo-\(UUID().uuidString)")
+            .appendingPathComponent("gitthat-seq-\(UUID().uuidString)")
         try Data(todo.utf8).write(to: todoFileURL)
         defer { try? FileManager.default.removeItem(at: todoFileURL) }
 
-        // Write queue file (NUL-delimited) only when there are reword steps.
+        // Write queue file (typed, NUL-delimited) whenever git might invoke the editor.
         var queueFileURL: URL? = nil
-        if !queue.isEmpty, let binary = binaryPath {
+        if hasEditorStep, let binary = binaryPath {
             let url = FileManager.default.temporaryDirectory
                 .appendingPathComponent("gitthat-queue-\(UUID().uuidString)")
-            try Data(queue.joined(separator: "\0").utf8).write(to: url)
+            try TodoFile.serialiseQueue(queue).write(to: url)
             queueFileURL = url
-
-            // Silence an "unused variable" warning — binary is referenced in env below.
             _ = binary
         }
         defer { queueFileURL.flatMap { try? FileManager.default.removeItem(at: $0) } }
 
-        // GIT_SEQUENCE_EDITOR: copy the pre-written todo file over the file git passes as $1.
-        // The todo path is in an env var so special characters in the path cannot break the command.
-        let sequenceEditorCmd = "sh -c 'cp \"$GITTHAT_TODO_FILE\" \"$1\"' sh"
+        // GIT_SEQUENCE_EDITOR: copy the pre-written sequence file over the file git passes as $1.
+        // The path is in an env var so special characters in the path cannot break the command.
+        let sequenceEditorCmd = "sh -c 'cp \"$GITTHAT_SEQ_FILE\" \"$1\"' sh"
 
         var env: [String: String] = [
-            "GITTHAT_TODO_FILE": todoFileURL.path,
+            "GITTHAT_SEQ_FILE": todoFileURL.path,
             "GIT_SEQUENCE_EDITOR": sequenceEditorCmd,
         ]
         // GIT_TERMINAL_PROMPT is set inside git.rewriteInteractive; no need to duplicate it here.
 
         // Set GIT_EDITOR whenever git might invoke it (reword `r` or squash `s` steps).
-        // For squash-only plans (no reword, empty queue), the editor exits immediately
-        // without modifying the message — git uses its default combined-message template.
         if hasEditorStep, let binary = binaryPath {
             env["GIT_EDITOR"] = "\(binary) __edit-message"
             if let queueFile = queueFileURL {
                 env["GITTHAT_MESSAGE_QUEUE"] = queueFile.path
             }
-            // No GITTHAT_MESSAGE_QUEUE when queue is empty: the script sees no queue file
-            // and exits 0 without modifying the message (squash gets default combined message).
         }
 
-        let exitCode = try git.rewriteInteractive(baseSha: baseSha, autostash: autostash, environment: env)
-        return exitCode != 0
+        let result = try git.rewriteInteractive(baseSha: baseSha, autostash: autostash, environment: env)
+        guard result.exitCode != 0 else { return false }
+
+        // Non-zero exit: discriminate between a genuine conflict (git left in-progress state)
+        // and a real failure (corrupt repo, missing object, rejected hook, resource exhaustion…).
+        if git.rewriteInProgress() {
+            return true  // genuine conflict — caller shows resume/cancel instructions
+        }
+        // No in-progress state: this is a real failure the user cannot resolve by fixing conflicts.
+        throw RewriteFlowError.rewriteFailed(stderr: result.stderr, backupRef: backupRef)
+    }
+
+    /// Runs a blocking body on a dedicated thread instead of the cooperative pool.
+    /// The cooperative pool has roughly one thread per core, so blocking one for the
+    /// length of a git rewrite stalls unrelated async work. A dedicated Thread is used
+    /// rather than DispatchQueue.global() because that pool grows slowly under load
+    /// and would queue the work behind other blocked rewrites.
+    private func runBlocking<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            let thread = Thread {
+                continuation.resume(with: Result { try body() })
+            }
+            thread.stackSize = 512 * 1024
+            thread.start()
+        }
     }
 
     /// Returns the running binary's absolute path, or nil if it cannot be resolved.

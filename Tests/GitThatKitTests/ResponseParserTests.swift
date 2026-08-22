@@ -78,6 +78,13 @@ func rejectsEmptyResponses(raw: String) {
     #expect(message.subject == "here's the deal: it works")
 }
 
+// Prose before an opening fence: stripFences should find the fence and extract content.
+@Test func proseBeforeFenceIsStripped() throws {
+    let raw = "Here is the commit message:\n```\nfeat: add feature\n```"
+    let message = try ResponseParser.commitMessage(from: raw)
+    #expect(message.subject == "feat: add feature")
+}
+
 // Fix (a): unclosed opening fence — content after the fence should be used.
 @Test func unclosedFenceUsesContent() throws {
     let message = try ResponseParser.commitMessage(from: "```\nfeat: fix")

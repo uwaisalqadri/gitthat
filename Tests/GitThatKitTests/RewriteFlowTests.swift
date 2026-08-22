@@ -25,6 +25,7 @@ private func makeEditMessageScript() -> String {
 
     // $1 = "__edit-message", $2 = the message file git gave us.
     // We use python3 for reliable NUL-byte handling.
+    // Entries are typed: b'W' + message (write) or b'L' (leave git's file untouched).
     let pyScript = """
 import sys, os
 msg_file = sys.argv[1]
@@ -32,11 +33,15 @@ queue_file = os.environ.get('GITTHAT_MESSAGE_QUEUE', '')
 if not queue_file or not os.path.exists(queue_file):
     sys.exit(0)
 data = open(queue_file, 'rb').read()
-entries = data.split(b'\\x00', -1)  # mirror Swift omittingEmptySubsequences: false
+entries = data.split(b'\\x00') if data else []
 if not entries:
     sys.exit(0)
-open(msg_file, 'wb').write(entries[0])
-open(queue_file, 'wb').write(b'\\x00'.join(entries[1:]))
+first = entries[0]
+remaining = entries[1:]
+if first.startswith(b'W'):
+    open(msg_file, 'wb').write(first[1:])
+# 'L' entries: leave git's file untouched
+open(queue_file, 'wb').write(b'\\x00'.join(remaining))
 """
     let pyPath = tmp.appendingPathExtension("py").path
     FileManager.default.createFile(atPath: pyPath, contents: Data(pyScript.utf8))
@@ -572,6 +577,59 @@ private func rangeShas(repo: RepoFixture, count: Int) -> [String] {
 
     // Suppress unused-variable warning for backupRef / originalHead used above defensively.
     _ = backupRef; _ = originalHead
+}
+
+// MARK: - Non-conflict failure path
+
+/// A pre-rebase hook that exits 1 causes git to abort immediately — no in-progress state
+/// is left behind. The flow must throw `rewriteFailed` (not return `.conflicted`), the error
+/// must carry git's stderr verbatim, and the backup ref must still be intact.
+///
+/// How the failure is provoked: we install a `pre-rebase` hook in `.git/hooks/` that prints
+/// a sentinel message to stderr and exits 1. `git rebase -i` honours this hook and aborts
+/// before creating any rebase-merge/rebase-apply directory, so `rewriteInProgress()` returns
+/// false and `runRebase` throws instead of returning true.
+@Test func nonConflictFailureThrowsRewriteFailedWithStderrAndBackupRef() async throws {
+    let repo = RepoFixture()
+        .commit("feat: one", file: "a.txt", contents: "1")
+        .commit("feat: two", file: "b.txt", contents: "2")
+
+    // Install a pre-rebase hook that rejects every rebase with a sentinel stderr message.
+    let hooksDir = repo.directory.appendingPathComponent(".git/hooks")
+    try FileManager.default.createDirectory(at: hooksDir, withIntermediateDirectories: true)
+    let hookPath = hooksDir.appendingPathComponent("pre-rebase").path
+    let hookScript = "#!/bin/sh\necho 'pre-rebase: hook rejected the operation' >&2\nexit 1\n"
+    FileManager.default.createFile(atPath: hookPath, contents: Data(hookScript.utf8))
+    let chmod = Process()
+    chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
+    chmod.arguments = ["+x", hookPath]
+    try chmod.run(); chmod.waitUntilExit()
+
+    let shas = rangeShas(repo: repo, count: 2)
+    let plan = combinePlan(shas: shas)
+    let provider = StubProvider(response: plan)
+    let ui = RecordingUI(confirmations: [true])
+    let flow = makeFlow(repo: repo, provider: provider, ui: ui)
+
+    do {
+        _ = try await flow.run(intent: nil, count: 2, autostash: false)
+        Issue.record("expected rewriteFailed to be thrown")
+    } catch let err as RewriteFlowError {
+        guard case .rewriteFailed(let stderr, let backupRef) = err else {
+            Issue.record("expected rewriteFailed, got \(err)")
+            return
+        }
+        // stderr must carry git's output (the hook printed a sentinel line)
+        #expect(stderr.contains("pre-rebase"), "stderr must include hook output; got: \(stderr)")
+        // backup ref must be present and valid
+        #expect(backupRef.hasPrefix("refs/gitthat/backup/"))
+        let backupSha = repo.run(["rev-parse", backupRef]).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(!backupSha.isEmpty, "backup ref must resolve to a SHA")
+        // error description must name the backup ref and recovery command
+        let desc = err.localizedDescription
+        #expect(desc.contains(backupRef))
+        #expect(desc.contains("git reset --hard"))
+    }
 }
 
 /// --resume (rewriteContinue) returns 0 after a conflict is resolved.

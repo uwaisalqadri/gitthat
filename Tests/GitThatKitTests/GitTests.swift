@@ -25,7 +25,8 @@ import Testing
 
     let diff = try repo.git.stagedDiff(limit: 8192)
     #expect(diff.wasTruncated)
-    #expect(diff.text.count <= 8192)
+    #expect(diff.text.count == 8192)           // exact boundary, not just ≤
+    #expect(diff.text.hasPrefix("diff --git")) // real diff content, not an empty string
 }
 
 @Test func reportsWhetherAnythingIsStaged() throws {

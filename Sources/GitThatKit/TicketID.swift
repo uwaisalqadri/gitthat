@@ -7,7 +7,7 @@ public enum TicketID {
     // ponytail: nonisolated(unsafe) because Regex is not Sendable but this value
     // is immutable after init and never mutated; computed-property alternative
     // would rebuild Regex on every call.
-    nonisolated(unsafe) private static let pattern = try! Regex(#"[A-Z][A-Z0-9]+-[0-9]+"#)
+    nonisolated(unsafe) private static let pattern = try! Regex(#"\b[A-Z][A-Z0-9]+-[0-9]+\b"#)
 
     public static func extract(fromBranch branch: String?) -> String? {
         guard let branch else { return nil }

@@ -63,6 +63,8 @@ extension ConfigError: LocalizedError {
         case .invalidValue(let key, let value, let allowed):
             let list = allowed.joined(separator: ", ")
             return "Invalid value '\(value)' for '\(key)'. Allowed: \(list)"
+        case .unreadable(let path, let reason):
+            return "Config file cannot be read: \(path)\n\(reason)"
         }
     }
 }
@@ -129,6 +131,16 @@ extension RewriteFlowError: LocalizedError {
             return "The agent returned a plan that could not be applied.\nRaw output:\n\(raw)"
         case .missingBinaryPath:
             return "Could not resolve the path to the gitthat binary. Run gitthat from its installed location."
+        case .rewriteFailed(let stderr, let backupRef):
+            let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let gitOutput = detail.isEmpty ? "(no output)" : detail
+            return """
+                The history rewrite process failed before it could be completed. \
+                This is not a merge conflict — there is nothing to resolve.
+                Git output: \(gitOutput)
+                Your original history is intact at: \(backupRef)
+                To recover: git reset --hard \(backupRef)
+                """
         }
     }
 }

@@ -144,3 +144,46 @@ let exemptFiles: Set<String> = ["GitVocabulary.swift", "Git.swift"]
 ### Full test output
 
 224 tests, 0 failures (218 prior + 6 new: `crossBranchDoesNotFalsePositiveOnShortBranchNames`, `crossBranchIntentWithFullBranchNameIsRefused`, `missingBinaryPathWithRewordStepsThrows`, `conflictDuringRewriteReturnsConflictedAndShowsOptions`, `cancelAfterConflictRestoresHead`, `messageQueuePositionsMatchTodoFileOrder`).
+
+---
+
+## Fix round 3
+
+### Finding (1) — Message queue desyncs when combine(keepMessage:true) precedes reword: FIXED
+
+**Root cause:** `TodoFile.messageQueue` built a flat `[String]` from reword steps only. But git opens `GIT_EDITOR` for *both* reword (`r`) steps and each squash-group (consecutive `s` lines get one editor invocation when the group completes). The squash invocation popped a reword message from the queue, shifting every subsequent reword to the wrong commit.
+
+**Empirical verification:** Set up a scratch repo with `p A, s B, s C, r D` todo. Recorded GIT_EDITOR invocations: 2 total — first for the squash group `s B, s C` (one invocation showing git's combined-message template), second for the `r D` reword. Confirmed with a second test (`r A, s B, s C, r D`) which produced 3 invocations: WRITE A, LEAVE (group B+C), WRITE D. This is the empirical basis for the queue design.
+
+**Queue design:** `[TodoFile.QueueEntry]` where each entry is `.write(String)` (write message to git's file) or `.leave` (leave git's file untouched). The algorithm groups consecutive `s` steps — the first step in a squash group emits one `.leave` entry, subsequent steps in the same group emit nothing. A `r` step emits `.write(message)`. `f`, `p`, and `delete` steps emit nothing.
+
+Serialised as NUL-delimited records with a 1-byte prefix: `W<message>` for write, `L` for leave. The prefix makes leave distinguishable from any message string. `EditMessageCommand.swift` and both Python test scripts updated to consume the prefix.
+
+**Exclusion removed:** The 19-line `hasRewordAfterCombineKeep` guard in `runPermutation` in `PermutationTests.swift` was deleted. This guard was excluding **672 permutations** from execution. All 672 now execute and pass all eleven invariants.
+
+### Finding (2) — Timing tests flake under parallel-rebase CPU saturation: FIXED
+
+Wrapped `killsACommandThatOverrunsItsTimeout` and `killsACommandThatTrapsSIGTERM` in a `@Suite("TimingTests", .serialized)` so they run one-at-a-time and don't race with concurrent git rebases from the permutation tier.
+
+Upper bounds loosened to remain property-proving: timeout test `< 20s` (sleep is 30s), SIGTERM test `< 15s` (sleep is 20s, SIGKILL fires after 1s timeout + 2s grace). Both bounds are still far below the underlying sleep durations, so the property — that SIGKILL fires — is still asserted.
+
+### Finding (3) — README status banner was false: FIXED
+
+Updated lines 21–24 to accurately state that `commit`, `rewrite`, and `undo` work, and that conflict resolution during rewrite is not yet implemented (the user gets `--resume`/`--cancel`).
+
+### New tests added (8)
+
+`TodoFileTests.swift`: `messageQueueSquashGroupEmitsOneLeaveThenReword`, `messageQueueRewordBeforeAndAfterSquashGroup`, `messageQueueConsecutiveSquashGroupsAreSeparatedByLeaves`, `queueEntriesRoundTripThroughSerialisation`. Plus updated: `messageQueueReturnsRewordMessagesInOrder`, `messageQueueEmptyWhenNoEditorSteps`, `messageQueueSkipsNilMessages`, `messageQueuePositionsMatchTodoFileOrder`.
+
+### End-to-end scratch run (combine-then-reword)
+
+Scratch repo with commits A, B, C. Todo: `p A, s B, r C`. Queue: `[.leave, .write("feat: reworded C")]`. After rebase: 2 commits — `feat: a` (A+B merged, squash group left git's template untouched) and `feat: reworded C` (reword landed on the correct commit). **SUCCEEDED.**
+
+### Permutation count
+
+Previously excluded: **672 permutations**. All 672 now run and pass all 11 invariants.
+
+### Full suite results
+
+Run 1: **232 tests, 0 failures** (35.0s).
+Run 2: **232 tests, 0 failures** (35.3s).

@@ -160,3 +160,50 @@ private func writeTemporary(_ contents: String) throws -> URL {
     #expect(config.commit.style == .auto)
     #expect(config.commit.subjectCase == .lower)
 }
+
+@Test func rejectsStringValueForMaxSubject() throws {
+    // Type mismatch: a string where an integer is expected must throw, not silently use the default.
+    #expect(throws: ConfigError.invalidValue(
+        key: "commit.max_subject", value: "seventy", allowed: ["integer"]
+    )) {
+        try Config.parse("""
+            [commit]
+            max_subject = "seventy"
+            """)
+    }
+}
+
+@Test func absentMaxSubjectKeyInheritsRatherThanThrows() throws {
+    // Absent key → inherit; must NOT throw (regression guard for B4 fix).
+    let config = try Config.parse("""
+        [commit]
+        style = "plain"
+        """)
+    #expect(config.commit.maxSubject == 72)
+}
+
+@Test func unreadableConfigFileThrowsDistinctError() throws {
+    // Create a file then make it unreadable; load must throw unreadable, not silently use defaults.
+    // Skip when running as root (root can read any file regardless of permissions).
+    guard ProcessInfo.processInfo.environment["USER"] != "root" else { return }
+
+    let url = try writeTemporary("[commit]\nstyle = \"plain\"\n")
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+        try? FileManager.default.removeItem(at: url)
+    }
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+
+    var caught: ConfigError? = nil
+    do {
+        _ = try Config.load(globalPath: url, repositoryPath: nil)
+    } catch let e as ConfigError {
+        caught = e
+    }
+
+    if case .unreadable(let path, _) = caught {
+        #expect(path == url.path)
+    } else {
+        Issue.record("expected ConfigError.unreadable, got \(String(describing: caught))")
+    }
+}

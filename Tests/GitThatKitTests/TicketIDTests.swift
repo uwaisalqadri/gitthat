@@ -31,3 +31,13 @@ func findsNoTicket(branch: String) {
     #expect(TicketID.appearsIn(subjects: ["PROJ-1 add a thing", "fix a thing"]))
     #expect(!TicketID.appearsIn(subjects: ["add a thing", "fix a thing"]))
 }
+
+// Word-boundary anchors: prefixed/suffixed alphanumeric must not match.
+@Test(arguments: [
+    "myPROJ-1thing",     // prefix and suffix — neither word boundary satisfied
+    "xPROJ-1",           // no word boundary before P
+    "PROJ-1x",           // no word boundary after digit
+])
+func wordBoundaryPreventsPartialMatch(branch: String) {
+    #expect(TicketID.extract(fromBranch: branch) == nil)
+}

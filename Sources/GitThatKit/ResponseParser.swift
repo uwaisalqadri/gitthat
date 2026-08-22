@@ -53,21 +53,25 @@ public enum ResponseParser {
             line.trimmingCharacters(in: .whitespaces).hasPrefix("```")
         }
 
-        // Find first non-empty line; if it's a fence, extract the fenced content.
-        if let first = lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }),
-           isFence(lines[first]) {
-            let remainder = lines[(first + 1)...]
-            if let closing = remainder.lastIndex(where: isFence) {
-                // Normal case: opening + closing fence found — content is between them.
-                // Only trim the fence delimiter lines; preserve indentation of content lines.
-                return remainder[..<closing].joined(separator: "\n")
-            } else {
-                // Fix (a): unclosed opening fence — use everything after the opener.
-                return remainder.joined(separator: "\n")
+        // Find the first fence. If it has a closing fence after it and non-empty content between
+        // them, this is a fenced block (possibly with preamble prose before it) — extract the content.
+        // This handles: bare fenced, fenced+lang-tag, preamble-then-fenced.
+        if let open = lines.firstIndex(where: isFence) {
+            let remainder = lines[(open + 1)...]
+            if !remainder.isEmpty {
+                if let closing = remainder.lastIndex(where: isFence) {
+                    // Opening + closing fence found — content is everything between them.
+                    return remainder[..<closing].joined(separator: "\n")
+                } else {
+                    // Fix (a): unclosed opening fence — use everything after the opener.
+                    return remainder.joined(separator: "\n")
+                }
             }
+            // Fence is the last line with nothing after it — fall through to orphan-strip.
         }
 
-        // Fix (b): no opening fence — strip any orphan closing fence lines.
+        // Fix (b): no opening fence, or fence at the very end with no content after it.
+        // Strip any orphan fence lines (e.g., trailing ``` with content before it).
         let stripped = lines.filter { !isFence($0) }
         if stripped.count == lines.count { return raw }  // nothing changed, return original
         return stripped.joined(separator: "\n")
