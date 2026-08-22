@@ -8,6 +8,7 @@ import Foundation
 final class RecordingUI: UserInterface, @unchecked Sendable {
     private let lock = NSLock()
     private var commitChoices: [CommitChoice]
+    private var conflictChoices: [ConflictChoice]
     private var styleChoices: [CommitStyle]
     private var confirmations: [Bool]
     var editResult: String?
@@ -17,10 +18,12 @@ final class RecordingUI: UserInterface, @unchecked Sendable {
 
     init(
         commitChoices: [CommitChoice] = [.accept],
+        conflictChoices: [ConflictChoice] = [.skip],
         styleChoices: [CommitStyle] = [.conventional],
         confirmations: [Bool] = [true]
     ) {
         self.commitChoices = commitChoices
+        self.conflictChoices = conflictChoices
         self.styleChoices = styleChoices
         self.confirmations = confirmations
     }
@@ -31,6 +34,13 @@ final class RecordingUI: UserInterface, @unchecked Sendable {
         lock.withLock {
             guard !commitChoices.isEmpty else { return .cancel }
             return commitChoices.count > 1 ? commitChoices.removeFirst() : commitChoices[0]
+        }
+    }
+
+    func askConflictChoice() -> ConflictChoice {
+        lock.withLock {
+            guard !conflictChoices.isEmpty else { return .skip }
+            return conflictChoices.count > 1 ? conflictChoices.removeFirst() : conflictChoices[0]
         }
     }
 

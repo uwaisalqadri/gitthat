@@ -146,6 +146,17 @@ extension RewriteFlowError: LocalizedError {
 }
 
 
+extension ConflictFlowError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .notStopped:
+            return "No merge conflict is in progress. Run this command while a patch apply is stopped due to conflicts."
+        case .resolutionContainsMarkers:
+            return "Resolution still contains conflict markers and was not staged. Please resolve all markers manually."
+        }
+    }
+}
+
 extension SafetyError: LocalizedError {
     public var errorDescription: String? {
         switch self {

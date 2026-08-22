@@ -143,26 +143,54 @@ public struct RewriteFlow: Sendable {
             try runRebase(baseSha: range.baseSha, todo: todo, queue: queue, autostash: autostash, backupRef: backupRef)
         }
 
-        // 10. Conflict
+        // 10. Conflict — run the resolution loop instead of stopping.
         if conflicted {
-            ui.show(
-                "Conflict during rewrite. Resolve the conflict, then run:\n" +
-                "  gitthat rewrite --resume\n" +
-                "Or to cancel:\n" +
-                "  gitthat rewrite --cancel"
-            )
-            return .conflicted
+            let conflictOutcome = try await resolveConflicts(backupRef: backupRef)
+            switch conflictOutcome {
+            case .allResolved:
+                // Continue the rewrite to completion, then fall through to verify + success.
+                let continueCode = try git.rewriteContinue()
+                if continueCode != 0 {
+                    // Continue failed — likely another conflict or a real error.
+                    // Leave the rebase in its stopped state so the user can use --resume/--cancel.
+                    ui.show(
+                        "Conflict during rewrite. Resolve the conflict, then run:\n" +
+                        "  gitthat rewrite --resume\n" +
+                        "Or to cancel:\n" +
+                        "  gitthat rewrite --cancel"
+                    )
+                    return .conflicted
+                }
+                // Fall through to verify + .rewritten below.
+            case .someSkipped(let skippedFiles):
+                let list = skippedFiles.map { "  \($0)" }.joined(separator: "\n")
+                ui.show(
+                    "Some files remain conflicted:\n\(list)\n" +
+                    "Resolve them manually, then run:\n" +
+                    "  gitthat rewrite --resume\n" +
+                    "Or to abandon the rewrite:\n" +
+                    "  gitthat rewrite --cancel"
+                )
+                return .conflicted
+            case .cancelled:
+                ui.show(
+                    "Conflict resolution cancelled. The rewrite is paused.\n" +
+                    "To finish manually: gitthat rewrite --resume\n" +
+                    "To abandon: gitthat rewrite --cancel"
+                )
+                return .conflicted
+            }
         }
 
         // 11. Verify (if configured); report failure but do NOT roll back
-        if let verifyCmd = config.rewrite.verify, !verifyCmd.isEmpty {
-            let code = git.shell(verifyCmd)
-            if code != 0 {
-                ui.show(
-                    "Verify command failed (exit \(code)): \(verifyCmd)\n" +
-                    "The rewrite completed. To undo: gitthat undo"
-                )
-            }
+        let hook = VerifyHook(command: config.rewrite.verify, git: git)
+        if case .failed(let output) = try hook.run() {
+            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            let detail = trimmed.isEmpty ? "(no output)" : trimmed
+            ui.show(
+                "Verify command failed:\n\(detail)\n" +
+                "The rewrite completed. To undo: gitthat undo"
+            )
         }
 
         return .rewritten(backupRef: backupRef)
@@ -264,6 +292,20 @@ public struct RewriteFlow: Sendable {
             thread.stackSize = 512 * 1024
             thread.start()
         }
+    }
+
+    /// Collects the current conflict set and runs the per-file resolution loop.
+    private func resolveConflicts(backupRef: String) async throws -> ConflictOutcome {
+        // Collect the conflict set. If git is no longer stopped (e.g. race), treat as cancelled.
+        let directory = git.topLevel() ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let set: ConflictSet
+        do {
+            set = try ConflictSet.collect(git: git, directory: directory)
+        } catch ConflictError.notStopped {
+            return .cancelled
+        }
+        let flow = ConflictFlow(git: git, provider: provider, ui: ui, directory: directory)
+        return try await flow.run(set)
     }
 
     /// Returns the running binary's absolute path, or nil if it cannot be resolved.

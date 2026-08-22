@@ -205,6 +205,127 @@ public struct Git: Sendable {
             }
     }
 
+    // MARK: – Conflict support
+
+    /// Returns paths with unresolved conflicts (index stages 2 and/or 3 present).
+    /// Throws `ConflictError.notStopped` when there are no unmerged paths.
+    public func conflictedPaths() throws -> [String] {
+        let result = try runner.run(
+            ["diff", "--name-only", "--diff-filter=U"],
+            in: directory, stdin: nil)
+        // git diff --name-only --diff-filter=U exits 0 even when there are no conflicts.
+        // An empty result with no unmerged paths means we're not in a conflict state.
+        guard result.succeeded else {
+            throw ConflictError.notStopped
+        }
+        let paths = result.stdout
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        guard !paths.isEmpty else { throw ConflictError.notStopped }
+        return paths
+    }
+
+    /// Returns true when any unmerged paths remain in the index.
+    public func unmergedPathsRemain() throws -> Bool {
+        let result = try runner.run(
+            ["diff", "--name-only", "--diff-filter=U"],
+            in: directory, stdin: nil)
+        guard result.succeeded else { return false }
+        return !result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Returns the text content and deletion status of both sides of a conflict for the given path.
+    /// Stage 2 = "ours" (HEAD), stage 3 = "theirs" (being applied).
+    ///
+    /// For each side:
+    /// - Non-nil text: the UTF-8 content of that stage.
+    /// - nil text + `isDeleted == true`: the index stage is absent — the file was deleted on that side.
+    /// - nil text + `isDeleted == false`: the stage exists but is binary (not valid UTF-8).
+    public func conflictSides(_ path: String) throws -> (
+        ours: String?, oursIsDeleted: Bool,
+        theirs: String?, theirsIsDeleted: Bool
+    ) {
+        let (oursText, oursDeleted) = readIndexStage(2, path: path)
+        let (theirsText, theirsDeleted) = readIndexStage(3, path: path)
+        return (ours: oursText, oursIsDeleted: oursDeleted,
+                theirs: theirsText, theirsIsDeleted: theirsDeleted)
+    }
+
+    /// Reads one index stage for `path` as raw bytes.
+    /// Returns `(text, isDeleted)`:
+    /// - `(String, false)`: stage present, UTF-8 decoded successfully.
+    /// - `(nil, true)`:  stage absent — the file was deleted on this side.
+    /// - `(nil, false)`: stage present but not valid UTF-8 — binary file.
+    private func readIndexStage(_ stage: Int, path: String) -> (String?, Bool) {
+        // Capture raw bytes via a temp file — the runner decodes via String(decoding:as:UTF8.self)
+        // which replaces bad bytes, making binary indistinguishable from text. We need the raw data.
+        let tmpURL = Self.makeTempFile()
+        defer { try? FileManager.default.removeItem(at: tmpURL) }
+
+        var env = ProcessInfo.processInfo.environment
+        for (k, v) in runner.environment { env[k] = v }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git", "show", ":\(stage):\(path)"]
+        process.currentDirectoryURL = directory
+        process.environment = env
+        let outputHandle = try? FileHandle(forWritingTo: tmpURL)
+        process.standardOutput = outputHandle
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+
+        try? process.run()
+        process.waitUntilExit()
+        try? outputHandle?.close()
+        // Non-zero exit means the stage doesn't exist — file was deleted on this side.
+        guard process.terminationStatus == 0 else { return (nil, true) }
+
+        guard let data = try? Data(contentsOf: tmpURL) else { return (nil, false) }
+        // Strict UTF-8: if any byte sequence is invalid, this is binary.
+        return (String(data: data, encoding: .utf8), false)
+    }
+
+    /// Stages a file that has been resolved, marking it as no longer conflicted.
+    public func stage(_ path: String) throws {
+        _ = try require(["add", path])
+    }
+
+    /// Returns the subject of the commit git was applying when it stopped, or nil if unavailable.
+    /// Reads `rebase-merge/stopped-sha` when in a rebase session; falls back to CHERRY_PICK_HEAD.
+    public func stoppedCommitSubject() throws -> String? {
+        func gitPath(_ name: String) -> URL? {
+            guard let result = try? runner.run(
+                ["rev-parse", "--git-path", name], in: directory, stdin: nil),
+                  result.succeeded else { return nil }
+            let p = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !p.isEmpty else { return nil }
+            return p.hasPrefix("/") ? URL(fileURLWithPath: p)
+                                    : directory.appendingPathComponent(p)
+        }
+
+        // Rebase session: stopped-sha file holds the exact commit SHA
+        if let stoppedURL = gitPath("rebase-merge/stopped-sha"),
+           FileManager.default.fileExists(atPath: stoppedURL.path),
+           let sha = try? String(contentsOf: stoppedURL, encoding: .utf8)
+               .trimmingCharacters(in: .whitespacesAndNewlines),
+           !sha.isEmpty {
+            return try? subject(of: sha)
+        }
+
+        // Cherry-pick outside a rebase: CHERRY_PICK_HEAD holds the commit SHA
+        if let cpURL = gitPath("CHERRY_PICK_HEAD"),
+           FileManager.default.fileExists(atPath: cpURL.path),
+           let sha = try? String(contentsOf: cpURL, encoding: .utf8)
+               .trimmingCharacters(in: .whitespacesAndNewlines),
+           !sha.isEmpty {
+            return try? subject(of: sha)
+        }
+
+        return nil
+    }
+
     // MARK: – Rewrite support
 
     /// Returns all local branch names (short format), used for cross-branch detection.
@@ -291,6 +412,14 @@ public struct Git: Sendable {
         return false
     }
 
+    /// Returns the repository root (--show-toplevel), or nil on failure.
+    public func topLevel() -> URL? {
+        guard let result = try? runner.run(["rev-parse", "--show-toplevel"], in: directory, stdin: nil),
+              result.succeeded else { return nil }
+        let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return path.isEmpty ? nil : URL(fileURLWithPath: path)
+    }
+
     /// Runs a shell command in the repository directory and returns the exit code.
     public func shell(_ command: String) -> Int32 {
         let process = Process()
@@ -302,6 +431,22 @@ public struct Git: Sendable {
         try? process.run()
         process.waitUntilExit()
         return process.terminationStatus
+    }
+
+    /// Runs a shell command and captures combined stdout+stderr. Returns (exitCode, output).
+    public func shellWithOutput(_ command: String) -> (Int32, String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", command]
+        process.currentDirectoryURL = directory
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try? process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let output = String(data: data, encoding: .utf8) ?? ""
+        return (process.terminationStatus, output)
     }
 
     private static func makeTempFile() -> URL {

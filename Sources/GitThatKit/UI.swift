@@ -14,6 +14,7 @@ public enum UIError: Error, Equatable {
 public protocol UserInterface: Sendable {
     func show(_ text: String)
     func askCommitChoice() -> CommitChoice
+    func askConflictChoice() -> ConflictChoice
     func askStyle() -> CommitStyle
     func confirm(_ question: String) -> Bool
     func edit(_ text: String) throws -> String
@@ -59,6 +60,22 @@ public struct TerminalUI: UserInterface {
             case "r":     return .regenerate
             case "c":     return .cancel
             default:      print("   Please answer a, e, r, or c.")
+            }
+        }
+    }
+
+    public func askConflictChoice() -> ConflictChoice {
+        while true {
+            print("\n   [a] accept into editor   [e] edit manually")
+            print("   [o] take ours            [t] take theirs   [s] skip: ", terminator: "")
+            guard let line = readLine() else { return .skip }
+            switch line.trimmingCharacters(in: .whitespaces).lowercased() {
+            case "a": return .acceptIntoEditor
+            case "e": return .editManually
+            case "o": return .takeOurs
+            case "t": return .takeTheirs
+            case "s": return .skip
+            default:  print("   Please answer a, e, o, t, or s.")
             }
         }
     }

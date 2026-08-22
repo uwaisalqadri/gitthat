@@ -19,9 +19,10 @@ key, no second subscription.
 ---
 
 > **Status: `gitthat commit`, `gitthat rewrite`, and `gitthat undo` are
-> implemented and covered by the test suite.** Conflict resolution during a
-> rewrite is not yet implemented — a rewrite that hits a conflict stops and
-> hands you `gitthat rewrite --resume` or `gitthat rewrite --cancel`.
+> implemented and covered by the test suite.** When a rewrite hits a conflict,
+> GITTHAT shows both sides, proposes a resolution via the configured AI agent,
+> and lets you accept, edit, take one side, or skip each file.
+> Nothing is staged without your review — this is enforced structurally, not by convention.
 
 ---
 
