@@ -28,9 +28,9 @@ extension ProviderError: LocalizedError {
         case .failed(let exitCode, let stderr):
             let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             if detail.isEmpty {
-                return "Provider exited with code \(exitCode)."
+                return "Provider exited with code \(exitCode). Check that the agent CLI is logged in (e.g. 'claude login') and try again."
             }
-            return "Provider exited with code \(exitCode):\n\(detail)"
+            return "Provider exited with code \(exitCode):\n\(detail)\nIf this is an authentication error, run the agent CLI's login command (e.g. 'claude login') and try again."
         case .empty:
             return "Provider returned an empty response. Check that the agent CLI is working correctly."
         }

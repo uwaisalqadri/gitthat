@@ -154,17 +154,111 @@ pass because they carry an internal capital — `iOS`, `GitHub`, `refreshToken`,
 `TokenStore`. Only ordinary words with a stray capital are touched. Set
 `subject_case = "preserve"` to turn it off.
 
-## Building
+## Install
 
-Requires Swift 6.3 or later.
+Requires Swift 6.3 or later, and an agent CLI you are already logged in to.
 
 ```sh
+git clone https://github.com/<you>/gitthat.git
+cd gitthat
 swift build -c release
 ```
 
-macOS needs nothing else; the Swift runtime ships with the OS. Linux needs
-`--static-swift-stdlib`, producing a roughly 40MB binary. Windows is not
-supported.
+That produces a 3MB binary at `.build/release/gitthat`. Put it on your `PATH`:
+
+```sh
+install -m 755 .build/release/gitthat /usr/local/bin/gitthat
+# or, without sudo:
+mkdir -p ~/.local/bin && install -m 755 .build/release/gitthat ~/.local/bin/gitthat
+```
+
+Check it:
+
+```sh
+gitthat --help
+```
+
+macOS needs nothing else — the Swift runtime ships with the OS. Linux needs
+`swift build -c release --static-swift-stdlib`, producing a roughly 40MB
+binary. Windows is not supported.
+
+### Make sure your agent is logged in
+
+GITTHAT spends an existing subscription through the vendor's CLI, so that CLI
+has to be authenticated. Verify it independently first:
+
+```sh
+echo "Reply with the word OK and nothing else." | claude -p
+```
+
+If that prints an authentication error, log in (`claude login`, or `/login`
+inside Claude Code) before using GITTHAT. When your agent is not authenticated,
+GITTHAT surfaces the CLI's own message rather than a bare exit code:
+
+```
+Error: Provider exited with code 1:
+Failed to authenticate: OAuth session expired and could not be refreshed
+If this is an authentication error, run the agent CLI's login command
+(e.g. 'claude login') and try again.
+```
+
+## Quick start
+
+Try it somewhere disposable first — GITTHAT rewrites history, and you should
+watch it work once before pointing it at anything you care about.
+
+```sh
+mkdir /tmp/gitthat-demo && cd /tmp/gitthat-demo
+git init -b main
+```
+
+**Write a commit message.** Stage something, then let GITTHAT describe it:
+
+```sh
+echo 'print("hello")' > hello.swift
+git add -A
+gitthat commit
+```
+
+It reads the staged diff, proposes a message, and waits. Press `a` to accept,
+`e` to edit it in `$EDITOR`, `r` to try again, or `c` to cancel. Nothing is
+committed until you choose.
+
+**Reshape messy history.** Make a few scrappy commits, then clean them up:
+
+```sh
+echo 'print("wip")' >> hello.swift && git add -A && gitthat commit
+echo 'print("more")' >> hello.swift && git add -A && gitthat commit
+
+gitthat rewrite "combine these into one commit and give it a proper message"
+```
+
+You get the before-and-after history, and nothing happens until you confirm.
+A backup ref is written before git is touched.
+
+**Put it back.** If you dislike the result:
+
+```sh
+gitthat undo
+```
+
+It lists recent states in plain language, shows exactly what will move, and
+restores on confirmation. Your working tree is untouched unless you pass
+`--hard`.
+
+### Using it on a real repository
+
+Nothing extra to set up — GITTHAT works with no config at all, and on first
+run it scans your `PATH` for a known agent CLI. Two habits worth keeping:
+
+- **`gitthat rewrite` defaults to unpushed commits only.** Reaching past what
+  you have already pushed is possible but takes a second, separate
+  confirmation, because it means rewriting history other people may have.
+- **GITTHAT never pushes.** After a rewrite it prints the
+  `git push --force-with-lease` for you to run yourself.
+
+If a rewrite hits a conflict, GITTHAT walks you through it file by file,
+proposes a resolution, and stages nothing you have not looked at.
 
 ## Testing
 

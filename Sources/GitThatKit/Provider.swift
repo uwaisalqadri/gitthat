@@ -105,7 +105,14 @@ public struct CLIProvider: Provider {
         }
 
         guard process.terminationStatus == 0 else {
-            throw ProviderError.failed(exitCode: process.terminationStatus, stderr: stderr)
+            // Many CLIs (e.g. claude) write diagnostics to stdout, not stderr.
+            // Prefer stderr when non-empty; fall back to stdout so we never discard
+            // the only available diagnosis. The enum label stays `stderr` for API stability.
+            let stdoutForDiag = Self.read(outputURL)
+            let diagnostic = stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? stdoutForDiag
+                : stderr
+            throw ProviderError.failed(exitCode: process.terminationStatus, stderr: diagnostic)
         }
 
         let output = Self.read(outputURL)

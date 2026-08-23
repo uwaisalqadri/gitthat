@@ -95,6 +95,92 @@ struct ProviderTests {
         #expect(output == bigPrompt)
     }
 
+    // MARK: - Stdout diagnostic capture (the real-world claude OAuth failure shape)
+
+    @Test func surfacesStdoutWhenStderrIsEmptyOnNonZeroExit() async throws {
+        // Regression: provider CLIs like `claude` write diagnostics to stdout, not stderr.
+        // Before the fix, this produced "Provider exited with code 1." with no detail.
+        let provider = CLIProvider(
+            command: ["sh", "-c", "echo 'Failed to authenticate: OAuth session expired'; exit 1"],
+            timeout: .seconds(5)
+        )
+        do {
+            _ = try await provider.complete("anything")
+            Issue.record("expected a failure")
+        } catch let error as ProviderError {
+            guard case .failed(let code, let detail) = error else {
+                Issue.record("expected .failed, got \(error)"); return
+            }
+            #expect(code == 1)
+            #expect(detail.contains("OAuth session expired"),
+                    "stdout diagnostic must reach the caller; got: \(detail)")
+        }
+    }
+
+    @Test func surfacesStderrWhenOnlyStderrIsWrittenOnNonZeroExit() async throws {
+        // Existing behaviour preserved: stderr-only diagnostics still work.
+        let provider = CLIProvider(
+            command: ["sh", "-c", "echo 'stderr only' >&2; exit 2"],
+            timeout: .seconds(5)
+        )
+        do {
+            _ = try await provider.complete("anything")
+            Issue.record("expected a failure")
+        } catch let error as ProviderError {
+            guard case .failed(let code, let detail) = error else {
+                Issue.record("expected .failed, got \(error)"); return
+            }
+            #expect(code == 2)
+            #expect(detail.contains("stderr only"))
+        }
+    }
+
+    @Test func prefersStderrWhenBothStreamsHaveContentOnNonZeroExit() async throws {
+        // When both streams have content, stderr wins (it's the conventional error stream).
+        let provider = CLIProvider(
+            command: ["sh", "-c", "echo 'stdout noise'; echo 'real error' >&2; exit 5"],
+            timeout: .seconds(5)
+        )
+        do {
+            _ = try await provider.complete("anything")
+            Issue.record("expected a failure")
+        } catch let error as ProviderError {
+            guard case .failed(let code, let detail) = error else {
+                Issue.record("expected .failed, got \(error)"); return
+            }
+            #expect(code == 5)
+            #expect(detail.contains("real error"), "stderr should be preferred; got: \(detail)")
+            // stdout noise must not replace the stderr diagnosis
+            #expect(!detail.trimmingCharacters(in: .whitespacesAndNewlines)
+                       .hasPrefix("stdout noise"),
+                    "stderr should win over stdout; got: \(detail)")
+        }
+    }
+
+    @Test func realWorldClaudeOAuthFailureShape() async throws {
+        // Exit 1, single line on stdout, empty stderr — the exact shape of `claude -p` when
+        // OAuth session has expired. The user must see the diagnostic, not a bare exit code.
+        let provider = CLIProvider(
+            command: ["sh", "-c",
+                      "printf 'Failed to authenticate: OAuth session expired and could not be refreshed'; exit 1"],
+            timeout: .seconds(5)
+        )
+        do {
+            _ = try await provider.complete("anything")
+            Issue.record("expected a failure")
+        } catch let error as ProviderError {
+            guard case .failed(let code, let detail) = error else {
+                Issue.record("expected .failed, got \(error)"); return
+            }
+            #expect(code == 1)
+            #expect(detail.contains("OAuth session expired and could not be refreshed"),
+                    "real-world diagnostic must reach the caller; got: \(detail)")
+            let description = error.localizedDescription
+            #expect(description.contains("OAuth session expired"),
+                    "error description must surface the diagnostic; got: \(description)")
+        }
+    }
+
     @Test func stubRecordsPromptsAndReturnsQueuedResponses() async throws {
         let stub = StubProvider(responses: ["first", "second"])
 
