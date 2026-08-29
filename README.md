@@ -156,10 +156,22 @@ pass because they carry an internal capital — `iOS`, `GitHub`, `refreshToken`,
 
 ## Install
 
-Requires Swift 6.3 or later, and an agent CLI you are already logged in to.
+```sh
+brew tap uwaisalqadri/gitthat https://github.com/uwaisalqadri/gitthat
+brew install --HEAD uwaisalqadri/gitthat/gitthat
+```
+
+Homebrew builds it from source, so the first install takes a minute. Update
+later with `brew update && brew reinstall uwaisalqadri/gitthat/gitthat`.
+
+You also need an agent CLI you are already logged in to — see below.
+
+### From source
+
+Requires Swift 6.3 or later.
 
 ```sh
-git clone https://github.com/<you>/gitthat.git
+git clone https://github.com/uwaisalqadri/gitthat.git
 cd gitthat
 swift build -c release
 ```
